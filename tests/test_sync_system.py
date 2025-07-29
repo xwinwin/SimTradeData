@@ -11,10 +11,13 @@ from unittest.mock import Mock
 import pytest
 
 from simtradedata.config import Config
-from simtradedata.data_sources import DataSourceManager
-from simtradedata.database import DatabaseManager
+from simtradedata.data_sources.manager import DataSourceManager
+from simtradedata.database.manager import DatabaseManager
 from simtradedata.preprocessor.engine import DataProcessingEngine
-from simtradedata.sync import DataValidator, GapDetector, IncrementalSync, SyncManager
+from simtradedata.sync.gap_detector import GapDetector
+from simtradedata.sync.incremental import IncrementalSync
+from simtradedata.sync.manager import SyncManager
+from simtradedata.sync.validator import DataValidator
 
 # 设置日志
 logging.basicConfig(level=logging.INFO)
@@ -29,7 +32,7 @@ class TestIncrementalSync:
         """模拟组件"""
         db_manager = Mock(spec=DatabaseManager)
         data_source_manager = Mock(spec=DataSourceManager)
-        preprocessor = Mock(spec=DataPreprocessor)
+        preprocessor = Mock(spec=DataProcessingEngine)
         config = Config()
 
         return db_manager, data_source_manager, preprocessor, config
@@ -143,6 +146,24 @@ class TestGapDetector:
         """测试检测单个股票缺口"""
         detector = GapDetector(mock_db_manager)
 
+        # 模拟交易日历数据
+        mock_db_manager.fetchall.side_effect = [
+            # 交易日历查询
+            [
+                {"date": "2024-01-18"},
+                {"date": "2024-01-19"},
+                {"date": "2024-01-22"},
+                {"date": "2024-01-23"},
+            ],
+            # 已有数据查询
+            [
+                {"date": "2024-01-18"},
+                {"date": "2024-01-19"},
+                {"date": "2024-01-23"},
+                # 缺少2024-01-22
+            ],
+        ]
+
         gaps = detector.detect_symbol_gaps(
             "000001.SZ", date(2024, 1, 18), date(2024, 1, 23), "1d"
         )
@@ -252,7 +273,7 @@ class TestSyncManager:
         """模拟组件"""
         db_manager = Mock(spec=DatabaseManager)
         data_source_manager = Mock(spec=DataSourceManager)
-        preprocessor = Mock(spec=DataPreprocessor)
+        preprocessor = Mock(spec=DataProcessingEngine)
         config = Config()
 
         # 模拟同步状态查询
@@ -274,7 +295,7 @@ class TestSyncManager:
 
         assert manager.db_manager is db_manager
         assert manager.data_source_manager is data_source_manager
-        assert manager.preprocessor is preprocessor
+        assert manager.processing_engine is preprocessor
         assert manager.incremental_sync is not None
         assert manager.gap_detector is not None
         assert manager.validator is not None
@@ -319,7 +340,7 @@ def test_sync_system_integration():
     ]
 
     # 模拟预处理器返回
-    preprocessor._process_symbol_data.return_value = True
+    preprocessor.process_symbol_data.return_value = True
 
     # 测试增量同步器
     incremental_sync = IncrementalSync(
@@ -342,16 +363,16 @@ def test_sync_system_integration():
 
     # 模拟交易日历和已有数据
     def fetchall_side_effect(sql, params=None):
-        if "ptrade_calendar" in sql:
+        if "trading_calendar" in sql:
             return [
-                {"trade_date": "2024-01-18"},
-                {"trade_date": "2024-01-19"},
-                {"trade_date": "2024-01-22"},
+                {"date": "2024-01-18"},
+                {"date": "2024-01-19"},
+                {"date": "2024-01-22"},
             ]
-        elif "DISTINCT trade_date" in sql:
+        elif "DISTINCT date" in sql:
             return [
-                {"trade_date": "2024-01-18"},
-                {"trade_date": "2024-01-19"},
+                {"date": "2024-01-18"},
+                {"date": "2024-01-19"},
                 # 缺少2024-01-22
             ]
         else:
