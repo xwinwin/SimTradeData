@@ -315,7 +315,31 @@ DATABASE_SCHEMA = {
             PRIMARY KEY (symbol, frequency)
         )
     """,
-    # 11. 系统配置表
+    # 11. 扩展数据同步状态表
+    "extended_sync_status": """
+        CREATE TABLE extended_sync_status (
+            symbol TEXT NOT NULL,
+            sync_type TEXT NOT NULL,                 -- 'financials'/'valuations'/'indicators'
+            target_date TEXT NOT NULL,               -- 目标日期
+            
+            -- 同步状态
+            status TEXT DEFAULT 'pending',           -- pending/processing/completed/failed/skipped
+            last_updated TIMESTAMP,
+            
+            -- 进度信息
+            phase TEXT DEFAULT 'extended_data',      -- 同步阶段标识
+            session_id TEXT,                         -- 同步会话ID
+            
+            -- 数据统计
+            records_count INTEGER DEFAULT 0,
+            
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            
+            PRIMARY KEY (symbol, sync_type, target_date)
+        )
+    """,
+    # 12. 系统配置表
     "system_config": """
         CREATE TABLE system_config (
             key TEXT PRIMARY KEY,
@@ -355,6 +379,10 @@ DATABASE_INDEXES = {
     # 同步状态索引
     "idx_sync_status_date": "CREATE INDEX idx_sync_status_date ON sync_status(last_sync_date DESC)",
     "idx_sync_status_status": "CREATE INDEX idx_sync_status_status ON sync_status(status, next_sync_date)",
+    # 扩展数据同步状态索引
+    "idx_extended_sync_symbol_date": "CREATE INDEX idx_extended_sync_symbol_date ON extended_sync_status(symbol, target_date DESC)",
+    "idx_extended_sync_status": "CREATE INDEX idx_extended_sync_status ON extended_sync_status(status, phase)",
+    "idx_extended_sync_session": "CREATE INDEX idx_extended_sync_session ON extended_sync_status(session_id, updated_at DESC)",
 }
 
 
