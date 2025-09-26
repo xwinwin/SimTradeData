@@ -222,7 +222,7 @@ class BaoStockAdapter(BaseDataSource):
                     if not industry_df.empty:
                         industry_row = industry_df.iloc[0]
                         basic_info["industry_l1"] = industry_row.get("industry", "")
-                        basic_info["industry_classification"] = industry_row.get(
+                        basic_info["industry_l2"] = industry_row.get(
                             "industryClassification", ""
                         )
 

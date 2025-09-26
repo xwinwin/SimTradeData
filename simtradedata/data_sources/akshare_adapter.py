@@ -516,3 +516,91 @@ class AkShareAdapter(BaseDataSource):
         if "." in symbol:
             return symbol.split(".")[0]
         return symbol
+
+    def get_stock_concepts(self, symbol: str) -> List[str]:
+        """
+        获取股票所属概念板块
+
+        Args:
+            symbol: 股票代码
+
+        Returns:
+            List[str]: 概念列表
+        """
+        if not self.is_connected():
+            self.connect()
+
+        symbol = self._normalize_symbol(symbol)
+        ak_symbol = self._convert_to_akshare_symbol(symbol)
+
+        def _fetch_concepts():
+            try:
+                concepts = []
+
+                # 获取所有概念板块
+                all_concepts = self._akshare.stock_board_concept_name_em()
+
+                # 对于每个概念板块，检查股票是否属于该概念
+                for _, concept_row in all_concepts.iterrows():
+                    concept_name = concept_row.get("板块名称", "")
+                    if concept_name:
+                        try:
+                            # 获取概念成分股
+                            concept_stocks = self._akshare.stock_board_concept_cons_em(
+                                symbol=concept_name
+                            )
+
+                            if not concept_stocks.empty:
+                                # 检查股票是否在成分股中
+                                matching_stocks = concept_stocks[
+                                    concept_stocks["代码"] == ak_symbol
+                                ]
+                                if not matching_stocks.empty:
+                                    concepts.append(concept_name)
+
+                        except Exception:
+                            # 某些概念板块可能无法获取成分股，跳过
+                            continue
+
+                return {"success": True, "data": concepts}
+
+            except Exception as e:
+                logger.error(f"获取股票概念失败 {symbol}: {e}")
+                return {"success": False, "data": [], "error": str(e)}
+
+        return self._retry_request(_fetch_concepts)
+
+    def get_all_concepts(self) -> List[Dict[str, Any]]:
+        """
+        获取所有概念板块列表
+
+        Returns:
+            List[Dict]: 概念板块信息
+        """
+        if not self.is_connected():
+            self.connect()
+
+        def _fetch_all_concepts():
+            try:
+                # 获取所有概念板块
+                concepts_df = self._akshare.stock_board_concept_name_em()
+
+                if concepts_df.empty:
+                    return {"success": True, "data": []}
+
+                concepts = []
+                for _, row in concepts_df.iterrows():
+                    concept_info = {
+                        "concept_name": row.get("板块名称", ""),
+                        "concept_code": row.get("板块代码", ""),
+                        "stock_count": row.get("成分股数量", 0),  # 如果有的话
+                    }
+                    concepts.append(concept_info)
+
+                return {"success": True, "data": concepts}
+
+            except Exception as e:
+                logger.error(f"获取所有概念板块失败: {e}")
+                return {"success": False, "data": [], "error": str(e)}
+
+        return self._retry_request(_fetch_all_concepts)

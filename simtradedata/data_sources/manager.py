@@ -564,6 +564,55 @@ class DataSourceManager(BaseManager):
         self.disconnect_all()
         return False
 
+    @unified_error_handler(return_dict=True)
+    def get_stock_concepts(
+        self, symbol: str, market: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """
+        获取股票所属概念板块
+
+        Args:
+            symbol: 股票代码
+            market: 市场代码
+
+        Returns:
+            Dict[str, Any]: 概念数据
+        """
+        if symbol and market is None:
+            market = self._parse_market_from_symbol(symbol)
+
+        # 概念数据主要从AKShare获取
+        priorities = ["akshare"]
+
+        for source_name in priorities:
+            if source_name not in self.sources:
+                continue
+
+            source = self.sources[source_name]
+            if not hasattr(source, "get_stock_concepts"):
+                continue
+
+            try:
+                if not source.is_connected():
+                    source.connect()
+
+                result = source.get_stock_concepts(symbol)
+                if result and result.get("success"):
+                    self.logger.debug(f"从 {source_name} 获取概念数据成功: {symbol}")
+                    return result
+
+            except Exception as e:
+                self.logger.warning(f"从 {source_name} 获取概念数据失败 {symbol}: {e}")
+                continue
+
+        # 如果所有数据源都失败，返回空结果
+        return {
+            "success": False,
+            "data": [],
+            "error": "无法从任何数据源获取概念数据",
+            "tried_sources": priorities,
+        }
+
     def __del__(self):
         """析构函数"""
         try:

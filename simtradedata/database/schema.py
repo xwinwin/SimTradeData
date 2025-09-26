@@ -12,33 +12,31 @@ logger = logging.getLogger(__name__)
 
 # 全新数据库表结构定义
 DATABASE_SCHEMA = {
-    # 1. 股票基础信息表
+    # 1. 股票基础信息表 (已优化：保留必要的行业和概念数据字段)
     "stocks": """
         CREATE TABLE stocks (
             symbol TEXT PRIMARY KEY,              -- 股票代码 (000001.SZ)
             name TEXT NOT NULL,                   -- 股票名称
-            market TEXT NOT NULL,                 -- 市场 (SZ/SS/HK/US)
-            exchange TEXT,                        -- 交易所
-            
+            market TEXT NOT NULL,                 -- 市场 (SZ/SS/HK/US) - exchange可从此推导
+
             -- 分类信息
-            industry_l1 TEXT,                     -- 一级行业
-            industry_l2 TEXT,                     -- 二级行业
-            concepts TEXT,                        -- 概念标签 (JSON数组)
-            
+            industry_l1 TEXT,                     -- 一级行业 (从BaoStock获取)
+            industry_l2 TEXT,                     -- 二级行业/行业分类 (从BaoStock industryClassification获取)
+            concepts TEXT,                        -- 概念标签 (JSON数组，从QStock/AKShare获取)
+
             -- 基础属性
             list_date DATE,                       -- 上市日期
             delist_date DATE,                     -- 退市日期
-            currency TEXT DEFAULT 'CNY',          -- 货币
-            lot_size INTEGER DEFAULT 100,         -- 最小交易单位
-            
+            lot_size INTEGER DEFAULT 100,         -- 最小交易单位 (CNY默认值在应用层处理)
+
             -- 股本信息
             total_shares REAL,                    -- 总股本
             float_shares REAL,                    -- 流通股本
-            
+
             -- 状态
             status TEXT DEFAULT 'active',         -- active/suspended/delisted
             is_st BOOLEAN DEFAULT FALSE,          -- 是否ST
-            
+
             -- 元数据
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP

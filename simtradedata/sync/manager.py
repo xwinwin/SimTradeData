@@ -1329,10 +1329,10 @@ class SyncManager(BaseManager):
                 try:
                     self.db_manager.executemany(
                         """
-                        INSERT INTO stocks (symbol, name, market, exchange, status, created_at, updated_at) 
-                        VALUES (?, ?, ?, ?, ?, datetime('now'), datetime('now'))
+                        INSERT INTO stocks (symbol, name, market, status, created_at, updated_at)
+                        VALUES (?, ?, ?, ?, datetime('now'), datetime('now'))
                         """,
-                        new_stock_batch,
+                        [(row[0], row[1], row[2], row[4]) for row in new_stock_batch],
                     )
                     new_stocks = len(new_stock_batch)
                     self.logger.debug(f"批量插入 {new_stocks} 只新股票")
@@ -1351,10 +1351,15 @@ class SyncManager(BaseManager):
                         try:
                             self.db_manager.execute(
                                 """
-                                INSERT INTO stocks (symbol, name, market, exchange, status, created_at, updated_at) 
-                                VALUES (?, ?, ?, ?, ?, datetime('now'), datetime('now'))
+                                INSERT INTO stocks (symbol, name, market, status, created_at, updated_at)
+                                VALUES (?, ?, ?, ?, datetime('now'), datetime('now'))
                                 """,
-                                stock_data,
+                                (
+                                    stock_data[0],
+                                    stock_data[1],
+                                    stock_data[2],
+                                    stock_data[4],
+                                ),
                             )
                             new_stocks += 1
                         except Exception as e2:
@@ -1400,7 +1405,21 @@ class SyncManager(BaseManager):
         """获取股票详细信息（股本、上市日期等）"""
         try:
             # 获取股票详细信息
-            detail_info = self.data_source_manager.get_stock_info(symbol)
+            response = self.data_source_manager.get_stock_info(symbol)
+
+            if not response or not isinstance(response, dict):
+                return
+
+            # 提取嵌套的数据
+            detail_info = None
+            if response.get("success") and response.get("data"):
+                data = response.get("data")
+                if data.get("success") and data.get("data"):
+                    detail_info = data.get("data")
+                else:
+                    detail_info = data
+            else:
+                detail_info = response
 
             if not detail_info or not isinstance(detail_info, dict):
                 return
@@ -1409,21 +1428,24 @@ class SyncManager(BaseManager):
             total_shares = detail_info.get("total_shares", 0)
             float_shares = detail_info.get("float_shares", 0)
             list_date = detail_info.get("list_date", "")
-            industry = detail_info.get("industry_l1", "")
+            industry_l1 = detail_info.get("industry_l1", "")
+            industry_l2 = detail_info.get("industry_l2", "")
 
             # 更新股票详细信息
-            if total_shares or float_shares or list_date or industry:
+            if total_shares or float_shares or list_date or industry_l1 or industry_l2:
                 self.db_manager.execute(
                     """
                     UPDATE stocks
-                    SET total_shares = ?, float_shares = ?, list_date = ?, industry_l1 = ?
+                    SET total_shares = ?, float_shares = ?, list_date = ?,
+                        industry_l1 = ?, industry_l2 = ?, updated_at = CURRENT_TIMESTAMP
                     WHERE symbol = ?
                     """,
                     (
                         total_shares if total_shares else None,
                         float_shares if float_shares else None,
                         list_date if list_date else None,
-                        industry if industry else None,
+                        industry_l1 if industry_l1 else None,
+                        industry_l2 if industry_l2 else None,
                         symbol,
                     ),
                 )
