@@ -212,12 +212,157 @@ class BaoStockAdapter(BaseDataSource):
                 df = rs.get_data()
                 if df.empty:
                     return {}
-                return self._convert_stock_info(df.iloc[0], symbol_norm)
+
+                basic_info = self._convert_stock_info(df.iloc[0], symbol_norm)
+
+                # 获取行业分类信息
+                industry_rs = self._baostock.query_stock_industry(code=bs_symbol)
+                if industry_rs.error_code == "0":
+                    industry_df = industry_rs.get_data()
+                    if not industry_df.empty:
+                        industry_row = industry_df.iloc[0]
+                        basic_info["industry_l1"] = industry_row.get("industry", "")
+                        basic_info["industry_classification"] = industry_row.get(
+                            "industryClassification", ""
+                        )
+
+                # 获取股本信息 - 使用最新财务数据获取股本
+                try:
+                    from datetime import datetime
+
+                    current_year = datetime.now().year
+                    profit_rs = self._baostock.query_profit_data(
+                        code=bs_symbol, year=current_year, quarter=4
+                    )
+                    if profit_rs.error_code == "0":
+                        profit_df = profit_rs.get_data()
+                        if not profit_df.empty:
+                            profit_row = profit_df.iloc[0]
+                            # 从财务数据获取股本信息
+                            total_share_capital = profit_row.get(
+                                "totalShareCapital", ""
+                            )
+                            if total_share_capital and total_share_capital != "":
+                                try:
+                                    basic_info["total_shares"] = (
+                                        float(total_share_capital) * 10000
+                                    )  # 万股转股
+                                    # 如果没有流通股本，暂时用总股本代替
+                                    if (
+                                        "float_shares" not in basic_info
+                                        or not basic_info["float_shares"]
+                                    ):
+                                        basic_info["float_shares"] = basic_info[
+                                            "total_shares"
+                                        ]
+                                except (ValueError, TypeError):
+                                    pass
+                except Exception as e:
+                    logger.debug(f"获取股本信息失败 {symbol}: {e}")
+
+                return basic_info
             else:
                 # 获取所有股票列表
                 rs = self._baostock.query_all_stock()
                 df = rs.get_data()
                 return self._convert_stock_list(df)
+
+        return self._retry_request(_fetch_data)
+
+    def get_valuation_data(
+        self,
+        symbol: str,
+        start_date: Union[str, date],
+        end_date: Union[str, date] = None,
+    ) -> List[Dict[str, Any]]:
+        """
+        获取估值数据
+
+        Args:
+            symbol: 股票代码
+            start_date: 开始日期
+            end_date: 结束日期，默认为开始日期
+
+        Returns:
+            List[Dict[str, Any]]: 估值数据列表
+        """
+        if not self.is_connected():
+            self.connect()
+
+        symbol = self._normalize_symbol(symbol)
+        start_date = self._normalize_date(start_date)
+        end_date = self._normalize_date(end_date) if end_date else start_date
+
+        def _fetch_data():
+            bs_symbol = self._convert_to_baostock_symbol(symbol)
+
+            # 获取日K线数据，包含估值指标
+            rs = self._baostock.query_history_k_data_plus(
+                bs_symbol,
+                "date,code,close,peTTM,pbMRQ,psTTM,pcfNcfTTM",
+                start_date=start_date,
+                end_date=end_date,
+                frequency="d",
+                adjustflag="3",  # 不复权
+            )
+
+            if rs.error_code != "0":
+                logger.warning(f"获取 {symbol} 估值数据失败: {rs.error_msg}")
+                return []
+
+            data_list = []
+            while (rs.error_code == "0") & rs.next():
+                data_list.append(rs.get_row_data())
+
+            if not data_list:
+                return []
+
+            df = pd.DataFrame(data_list, columns=rs.fields)
+
+            # 数据类型转换和清理
+            numeric_columns = ["close", "peTTM", "pbMRQ", "psTTM", "pcfNcfTTM"]
+            for col in numeric_columns:
+                if col in df.columns:
+                    df[col] = pd.to_numeric(df[col], errors="coerce")
+
+            # 过滤掉无效数据
+            df = df[
+                (df["peTTM"].notna() & (df["peTTM"] > 0))
+                | (df["pbMRQ"].notna() & (df["pbMRQ"] > 0))
+                | (df["psTTM"].notna() & (df["psTTM"] > 0))
+                | (df["pcfNcfTTM"].notna() & (df["pcfNcfTTM"] > 0))
+            ]
+
+            valuation_records = []
+            for _, row in df.iterrows():
+                record = {
+                    "symbol": symbol,
+                    "date": row["date"],
+                    "pe_ratio": (
+                        row["peTTM"]
+                        if pd.notna(row["peTTM"]) and row["peTTM"] > 0
+                        else None
+                    ),
+                    "pb_ratio": (
+                        row["pbMRQ"]
+                        if pd.notna(row["pbMRQ"]) and row["pbMRQ"] > 0
+                        else None
+                    ),
+                    "ps_ratio": (
+                        row["psTTM"]
+                        if pd.notna(row["psTTM"]) and row["psTTM"] > 0
+                        else None
+                    ),
+                    "pcf_ratio": (
+                        row["pcfNcfTTM"]
+                        if pd.notna(row["pcfNcfTTM"]) and row["pcfNcfTTM"] > 0
+                        else None
+                    ),
+                    "source": "baostock_api",
+                }
+                valuation_records.append(record)
+
+            return valuation_records
 
         return self._retry_request(_fetch_data)
 
@@ -592,13 +737,15 @@ class BaoStockAdapter(BaseDataSource):
         calendar_list = []
 
         for _, row in df.iterrows():
-            calendar_list.append(
-                {
-                    "trade_date": row["calendar_date"],
-                    "is_trading": int(row["is_trading_day"]),
-                    "market": "SZ",  # BaoStock主要是A股
-                }
-            )
+            # BaoStock交易日历对所有A股市场都通用，需要为每个市场生成记录
+            for market in ["SZ", "SS"]:  # 深交所和上交所
+                calendar_list.append(
+                    {
+                        "trade_date": row["calendar_date"],
+                        "is_trading": int(row["is_trading_day"]),
+                        "market": market,
+                    }
+                )
 
         return calendar_list
 

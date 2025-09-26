@@ -1337,11 +1337,8 @@ class SyncManager(BaseManager):
                     new_stocks = len(new_stock_batch)
                     self.logger.debug(f"批量插入 {new_stocks} 只新股票")
 
-                    # 异步获取详细信息（避免阻塞主流程）
-                    # 注意：由于远程API不能并发，这里只是标记需要后续处理
-                    for symbol, _, _, _, _ in new_stock_batch[
-                        :10
-                    ]:  # 限制数量，避免过度处理
+                    # 为所有新股票获取详细信息
+                    for symbol, _, _, _, _ in new_stock_batch:
                         try:
                             self._fetch_detailed_stock_info(symbol)
                         except Exception as e:
@@ -1405,35 +1402,32 @@ class SyncManager(BaseManager):
             # 获取股票详细信息
             detail_info = self.data_source_manager.get_stock_info(symbol)
 
-            if isinstance(detail_info, dict) and "data" in detail_info:
-                detail_info = detail_info["data"]
-
-            if detail_info is None or (
-                hasattr(detail_info, "empty") and detail_info.empty
-            ):
+            if not detail_info or not isinstance(detail_info, dict):
                 return
 
-            # 解析详细信息
-            if hasattr(detail_info, "iloc") and len(detail_info) > 0:
-                row = detail_info.iloc[0]
+            # 提取字段信息
+            total_shares = detail_info.get("total_shares", 0)
+            float_shares = detail_info.get("float_shares", 0)
+            list_date = detail_info.get("list_date", "")
+            industry = detail_info.get("industry_l1", "")
 
-                # 提取有用信息
-                total_shares = self._safe_extract_number(row.get("总股本", 0))
-                float_shares = self._safe_extract_number(row.get("流通股", 0))
-                list_date = self._safe_extract_date(row.get("上市日期", ""))
-                industry = str(row.get("行业", ""))
-
-                # 更新股票详细信息
-                if total_shares or float_shares or list_date or industry:
-                    self.db_manager.execute(
-                        """
-                        UPDATE stocks 
-                        SET total_shares = ?, float_shares = ?, list_date = ?, industry_l1 = ?
-                        WHERE symbol = ?
-                        """,
-                        (total_shares, float_shares, list_date, industry, symbol),
-                    )
-                    self.logger.debug(f"更新股票详细信息: {symbol}")
+            # 更新股票详细信息
+            if total_shares or float_shares or list_date or industry:
+                self.db_manager.execute(
+                    """
+                    UPDATE stocks
+                    SET total_shares = ?, float_shares = ?, list_date = ?, industry_l1 = ?
+                    WHERE symbol = ?
+                    """,
+                    (
+                        total_shares if total_shares else None,
+                        float_shares if float_shares else None,
+                        list_date if list_date else None,
+                        industry if industry else None,
+                        symbol,
+                    ),
+                )
+                self.logger.debug(f"更新股票详细信息: {symbol}")
 
         except Exception as e:
             self.logger.debug(f"获取 {symbol} 详细信息失败: {e}")
@@ -1537,6 +1531,65 @@ class SyncManager(BaseManager):
 
         return result
 
+    def _log_data_failure_with_context(
+        self, symbol: str, target_date: date, failure_reasons: List[str]
+    ):
+        """
+        记录带上下文的数据获取失败信息
+
+        Args:
+            symbol: 股票代码
+            target_date: 目标日期
+            failure_reasons: 失败原因列表
+        """
+        try:
+            # 尝试获取股票信息来判断是否已上市
+            stock_info_result = self.data_source_manager.get_stock_info(symbol)
+
+            # 处理多层嵌套的响应格式
+            stock_info = stock_info_result
+            while isinstance(stock_info, dict) and "data" in stock_info:
+                if stock_info.get("success") is False:
+                    # 如果任何层级失败，跳出处理
+                    stock_info = None
+                    break
+                stock_info = stock_info["data"]
+
+            if stock_info and isinstance(stock_info, dict):
+                ipo_date_str = stock_info.get("list_date", "")
+                if ipo_date_str:
+                    try:
+                        from datetime import datetime
+
+                        ipo_date = datetime.strptime(ipo_date_str, "%Y-%m-%d").date()
+
+                        if ipo_date > target_date:
+                            # 股票尚未上市，这是预期情况
+                            self.logger.info(
+                                f"股票尚未上市: {symbol} (上市日期: {ipo_date_str}, 目标日期: {target_date})"
+                            )
+                            return
+                        else:
+                            # 股票已上市但数据获取失败
+                            failure_detail = ", ".join(failure_reasons)
+                            self.logger.warning(
+                                f"数据获取失败: {symbol} ({failure_detail}) - 股票已于{ipo_date_str}上市"
+                            )
+                            return
+                    except (ValueError, TypeError):
+                        # IPO日期格式错误，按一般失败处理
+                        pass
+
+            # 无法获取IPO信息或格式异常，按一般数据获取失败处理
+            failure_detail = ", ".join(failure_reasons)
+            self.logger.warning(f"数据获取失败: {symbol} ({failure_detail})")
+
+        except Exception as e:
+            # 获取股票信息时发生异常，记录详细错误
+            failure_detail = ", ".join(failure_reasons)
+            self.logger.warning(f"数据获取失败: {symbol} ({failure_detail})")
+            self.logger.debug(f"股票信息检查异常: {symbol} - {e}")
+
     def _sync_single_symbol_with_transaction(
         self, symbol: str, target_date: date, session_id: str
     ) -> Dict[str, Any]:
@@ -1635,33 +1688,74 @@ class SyncManager(BaseManager):
 
             # 处理估值数据
             try:
-                valuation_data = self.data_source_manager.get_valuation_data(
-                    symbol, str(target_date)
-                )
+                # 优先尝试BaoStock获取估值数据
+                baostock_source = self.data_source_manager.sources.get("baostock")
+                if baostock_source and baostock_source.is_connected():
+                    try:
+                        valuation_records = baostock_source.get_valuation_data(
+                            symbol, str(target_date), str(target_date)
+                        )
 
-                # 标准数据源响应格式解包
-                valuation_data = self._extract_data_safely(valuation_data)
+                        if valuation_records:
+                            for record in valuation_records:
+                                # 检查是否已存在该记录
+                                existing = self.db_manager.fetchone(
+                                    "SELECT COUNT(*) as count FROM valuations WHERE symbol = ? AND date = ?",
+                                    (symbol, record["date"]),
+                                )
 
-                # 验证估值数据有效性
-                if valuation_data and DataQualityValidator.is_valid_valuation_data(
-                    valuation_data
-                ):
-                    self.db_manager.execute(
-                        "INSERT OR REPLACE INTO valuations (symbol, date, pe_ratio, pb_ratio, market_cap, source, created_at) VALUES (?, ?, ?, ?, ?, ?, datetime('now'))",
-                        (
-                            symbol,
-                            str(target_date),
-                            valuation_data.get("pe_ratio", None),
-                            valuation_data.get("pb_ratio", None),
-                            valuation_data.get("market_cap", None),
-                            "akshare",
-                        ),
+                                if existing["count"] == 0:
+                                    self.db_manager.execute(
+                                        """INSERT INTO valuations
+                                        (symbol, date, pe_ratio, pb_ratio, ps_ratio, pcf_ratio, source)
+                                        VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                                        (
+                                            symbol,
+                                            record["date"],
+                                            record.get("pe_ratio"),
+                                            record.get("pb_ratio"),
+                                            record.get("ps_ratio"),
+                                            record.get("pcf_ratio"),
+                                            record["source"],
+                                        ),
+                                    )
+                                    result["valuations_count"] += 1
+
+                            if valuation_records:
+                                valuation_success = True
+                                self.logger.debug(f"BaoStock估值数据插入成功: {symbol}")
+                    except Exception as e:
+                        self.logger.debug(f"BaoStock获取估值数据失败: {symbol} - {e}")
+
+                # 如果BaoStock失败，尝试原有方式作为后备
+                if not valuation_success:
+                    valuation_data = self.data_source_manager.get_valuation_data(
+                        symbol, str(target_date)
                     )
-                    result["valuations_count"] += 1
-                    valuation_success = True
-                    self.logger.debug(f"估值数据插入成功: {symbol}")
-                else:
-                    self.logger.debug(f"估值数据无效，跳过: {symbol}")
+
+                    # 标准数据源响应格式解包
+                    valuation_data = self._extract_data_safely(valuation_data)
+
+                    # 验证估值数据有效性
+                    if valuation_data and DataQualityValidator.is_valid_valuation_data(
+                        valuation_data
+                    ):
+                        self.db_manager.execute(
+                            "INSERT OR REPLACE INTO valuations (symbol, date, pe_ratio, pb_ratio, market_cap, source, created_at) VALUES (?, ?, ?, ?, ?, ?, datetime('now'))",
+                            (
+                                symbol,
+                                str(target_date),
+                                valuation_data.get("pe_ratio", None),
+                                valuation_data.get("pb_ratio", None),
+                                valuation_data.get("market_cap", None),
+                                "akshare",
+                            ),
+                        )
+                        result["valuations_count"] += 1
+                        valuation_success = True
+                        self.logger.debug(f"AkShare估值数据插入成功: {symbol}")
+                    else:
+                        self.logger.debug(f"估值数据无效，跳过: {symbol}")
 
             except Exception as e:
                 self.logger.warning(f"获取估值数据失败: {symbol} - {e}")
@@ -1669,6 +1763,8 @@ class SyncManager(BaseManager):
             # 处理技术指标（暂时跳过，标记为成功）
 
             # 根据数据获取结果决定最终状态（使用分级标准）
+            failure_reasons = []
+
             if financial_success:
                 final_status = "completed"  # 有财务数据就算完成
                 result["success"] = True
@@ -1682,7 +1778,17 @@ class SyncManager(BaseManager):
             else:
                 final_status = "failed"
                 result["success"] = False
-                self.logger.warning(f"数据获取全部失败: {symbol}")
+
+                # 收集具体的失败原因
+                if not financial_success:
+                    failure_reasons.append("财务数据")
+                if not valuation_success:
+                    failure_reasons.append("估值数据")
+
+                # 检查股票上市状态和失败原因
+                self._log_data_failure_with_context(
+                    symbol, target_date, failure_reasons
+                )
 
             # 更新最终状态
             self.db_manager.execute(
