@@ -51,9 +51,14 @@ SimTradeData/
 │   │   ├── sector_data.py              # 板块数据
 │   │   ├── etf_data.py                 # ETF数据
 │   │   └── technical_indicators.py     # 技术指标
+│   ├── 📁 monitoring/                  # 监控运维层
+│   │   ├── data_quality.py             # 数据质量监控
+│   │   ├── alert_system.py             # 告警系统
+│   │   └── alert_rules.py              # 告警规则工厂
 │   └── 📁 config/                      # 配置管理
 │       ├── manager.py                  # 配置管理器
-│       └── defaults.py                 # 默认配置
+│       ├── defaults.py                 # 默认配置
+│       └── production.py               # 生产配置
 ├── 📁 tests/                           # 测试套件
 │   ├── test_api_router.py              # API路由器测试
 │   ├── test_sync_basic.py              # 数据同步测试
@@ -68,9 +73,9 @@ SimTradeData/
 
 1. **模块化**: 每个模块职责单一，接口清晰
 2. **可扩展**: 支持插件式扩展新功能
-3. **高性能**: 多级缓存、并发处理、查询优化
-4. **可靠性**: 错误处理、健康检查、自动恢复
-5. **可观测**: 全面监控、日志记录、性能分析
+3. **高性能**: 多级缓存、并发处理、查询优化（技术指标434x提升）
+4. **可靠性**: 错误处理、健康检查、自动恢复、告警系统
+5. **可观测**: 全面监控、日志记录、性能分析、数据质量监控
 
 ### 依赖关系
 
@@ -836,6 +841,224 @@ message StockData {
 
 ### 添加新的监控指标
 
+#### 高级告警系统扩展
+
+SimTradeData提供完整的告警系统，支持自定义告警规则。
+
+**1. 创建自定义告警规则**
+
+```python
+from simtradedata.monitoring import AlertRule, AlertSeverity
+
+def custom_check_function():
+    """自定义检查函数"""
+    # 实现你的检查逻辑
+    # 返回None表示无告警，返回Dict表示触发告警
+
+    # 示例：检查数据更新时间
+    from datetime import datetime, timedelta
+    last_update = get_last_update_time()  # 你的逻辑
+
+    if datetime.now() - last_update > timedelta(hours=24):
+        return {
+            "message": f"数据已{(datetime.now() - last_update).days}天未更新",
+            "details": {
+                "last_update": last_update.isoformat(),
+                "current_time": datetime.now().isoformat()
+            }
+        }
+
+    return None  # 无告警
+
+# 创建告警规则
+custom_rule = AlertRule(
+    rule_id="custom_update_check",
+    name="数据更新检查",
+    check_func=custom_check_function,
+    severity=AlertSeverity.HIGH,
+    enabled=True,
+    cooldown_minutes=60,  # 1小时内不重复告警
+    description="检查数据是否按时更新"
+)
+
+# 添加到告警系统
+from simtradedata.monitoring import AlertSystem
+alert_system = AlertSystem(db_manager)
+alert_system.add_rule(custom_rule)
+```
+
+**2. 创建告警规则工厂方法**
+
+```python
+# 在 simtradedata/monitoring/alert_rules.py 中添加
+
+@staticmethod
+def create_custom_rule(
+    db_manager: DatabaseManager,
+    threshold: float = 100.0,
+    cooldown_minutes: int = 60
+) -> AlertRule:
+    """创建自定义告警规则
+
+    Args:
+        db_manager: 数据库管理器
+        threshold: 告警阈值
+        cooldown_minutes: 冷却时间（分钟）
+
+    Returns:
+        AlertRule: 告警规则
+    """
+    def check_func():
+        try:
+            # 实现检查逻辑
+            sql = "SELECT COUNT(*) as count FROM your_table WHERE condition"
+            result = db_manager.fetchone(sql)
+            count = result["count"] if result else 0
+
+            if count > threshold:
+                return {
+                    "message": f"检测到{count}条异常记录（阈值: {threshold}）",
+                    "details": {"count": count, "threshold": threshold}
+                }
+        except Exception as e:
+            logger.error(f"自定义检查失败: {e}")
+
+        return None
+
+    return AlertRule(
+        rule_id="custom_check",
+        name="自定义检查",
+        check_func=check_func,
+        severity=AlertSeverity.MEDIUM,
+        cooldown_minutes=cooldown_minutes,
+        description=f"当记录数超过{threshold}时告警"
+    )
+```
+
+**3. 创建自定义通知器**
+
+```python
+from simtradedata.monitoring import AlertNotifier
+
+class EmailNotifier(AlertNotifier):
+    """邮件通知器"""
+
+    def __init__(self, smtp_config):
+        self.smtp_host = smtp_config.get('host')
+        self.smtp_port = smtp_config.get('port')
+        self.from_email = smtp_config.get('from')
+        self.to_emails = smtp_config.get('to')
+
+    def send(self, alert: Dict[str, Any]) -> bool:
+        """发送邮件告警"""
+        try:
+            import smtplib
+            from email.mime.text import MIMEText
+
+            subject = f"[{alert['severity']}] {alert['rule_name']}"
+            body = f"""
+            告警消息: {alert['message']}
+
+            详细信息:
+            {json.dumps(alert['details'], indent=2, ensure_ascii=False)}
+
+            触发时间: {alert['timestamp']}
+            """
+
+            msg = MIMEText(body, 'plain', 'utf-8')
+            msg['Subject'] = subject
+            msg['From'] = self.from_email
+            msg['To'] = ', '.join(self.to_emails)
+
+            with smtplib.SMTP(self.smtp_host, self.smtp_port) as server:
+                server.send_message(msg)
+
+            return True
+        except Exception as e:
+            logger.error(f"邮件发送失败: {e}")
+            return False
+
+# 使用自定义通知器
+email_config = {
+    'host': 'smtp.example.com',
+    'port': 587,
+    'from': 'alert@example.com',
+    'to': ['admin@example.com']
+}
+
+alert_system = AlertSystem(db_manager)
+alert_system.add_notifier(EmailNotifier(email_config))
+```
+
+**4. 内置告警规则说明**
+
+SimTradeData提供6个内置告警规则：
+
+| 规则ID | 名称 | 严重程度 | 默认阈值 | 说明 |
+|--------|------|---------|---------|------|
+| data_quality_check | 数据质量检查 | MEDIUM | 80.0 | 数据质量评分低于阈值时告警 |
+| sync_failure_check | 同步失败检查 | HIGH | 20% | 同步失败率超过阈值时告警 |
+| database_size_check | 数据库大小检查 | MEDIUM | 10GB | 数据库超过大小限制时告警 |
+| missing_data_check | 数据缺失检查 | MEDIUM | 10% | 股票数据缺失率超过阈值时告警 |
+| stale_data_check | 陈旧数据检查 | HIGH | 7天 | 数据未更新超过指定天数时告警 |
+| duplicate_data_check | 重复数据检查 | LOW | - | 发现重复记录时告警 |
+
+**5. 告警管理API**
+
+```python
+# 查看所有激活的告警
+active_alerts = alert_system.history.get_active_alerts()
+
+# 查看特定严重程度的告警
+high_alerts = alert_system.history.get_active_alerts(severity="HIGH")
+
+# 确认告警
+alert_system.history.acknowledge_alert(alert_id)
+
+# 解决告警
+alert_system.history.resolve_alert(alert_id)
+
+# 获取告警统计
+stats = alert_system.history.get_alert_statistics()
+print(f"总告警数: {stats['total_alerts']}")
+print(f"高严重度: {stats['by_severity']['HIGH']}")
+print(f"平均响应时间: {stats['avg_acknowledgement_time_minutes']}分钟")
+
+# 获取告警摘要
+summary = alert_system.get_alert_summary()
+print(f"激活告警: {summary['active_alerts_count']}")
+print(f"启用规则: {summary['enabled_rules']}/{summary['total_rules']}")
+```
+
+#### 数据质量监控扩展
+
+**1. 自定义质量评分规则**
+
+```python
+from simtradedata.monitoring import DataQualityMonitor
+
+class CustomQualityMonitor(DataQualityMonitor):
+    """自定义数据质量监控器"""
+
+    def evaluate_custom_quality(self, symbol: str, date_range: tuple) -> float:
+        """评估自定义质量指标"""
+        # 实现自定义质量评分逻辑
+        completeness = self._check_completeness(symbol, date_range)
+        accuracy = self._check_accuracy(symbol, date_range)
+        timeliness = self._check_timeliness(symbol, date_range)
+
+        # 加权计算总分
+        quality_score = (
+            completeness * 0.4 +
+            accuracy * 0.4 +
+            timeliness * 0.2
+        )
+
+        return quality_score
+```
+
+### 添加新的监控指标
+
 1. **创建自定义收集器**
 
 ```python
@@ -871,36 +1094,109 @@ monitor.add_custom_collector('custom', CustomMetricCollector())
 
 ### 生产环境配置
 
+SimTradeData提供完整的生产环境配置支持。详细信息请参考 [生产部署指南](PRODUCTION_DEPLOYMENT_GUIDE.md)。
+
+**快速启用生产配置：**
+
 ```python
-# production_config.py
 from simtradedata.config import Config
+
+# 创建配置并启用生产模式
+config = Config()
+config.use_production_config = True  # 自动应用生产优化
+
+# 或者通过配置文件
+# config.yaml:
+# use_production_config: true
+```
+
+**生产配置特性：**
+
+1. **数据库优化**
+   - SQLite WAL模式（Write-Ahead Logging）
+   - 64MB缓存
+   - 256MB内存映射
+   - 并发性能优化
+
+2. **日志系统**
+   - 结构化日志（JSON格式）
+   - 日志分级（错误日志独立）
+   - 性能日志独立监控
+   - 自动日志轮转
+
+3. **性能调优**
+   - 查询缓存（600秒TTL）
+   - 技术指标缓存（434x性能提升）
+   - 并发查询能力（150+ QPS）
+
+4. **监控告警**
+   - 6个内置告警规则
+   - 自动健康检查
+   - 告警历史和统计
+
+**自定义生产配置：**
+
+```python
+# custom_production.py
+from simtradedata.config import Config, get_production_config
 
 def create_production_config():
     config = Config()
-    
-    # 数据库配置
+
+    # 加载生产基础配置
+    prod_config = get_production_config()
+
+    # 自定义数据库配置
     config.set('database.path', '/data/simtradedata.db')
-    config.set('database.pool_size', 20)
-    config.set('database.timeout', 60)
-    
-    # 缓存配置
-    config.set('cache.ttl', 300)
-    config.set('cache.max_size', 10000)
-    
-    # API配置
+    config.set('database.pragma.cache_size', -128000)  # 128MB缓存
+
+    # 自定义缓存配置
+    config.set('cache.ttl', 600)  # 10分钟
+    config.set('cache.max_size', 20000)
+
+    # 自定义API配置
     config.set('api.host', '0.0.0.0')
     config.set('api.port', 8080)
     config.set('api.workers', 4)
-    
-    # 监控配置
-    config.set('monitoring.enable', True)
-    config.set('monitoring.retention_days', 30)
-    
+
+    # 启用监控告警
+    config.set('monitoring.enabled', True)
+    config.set('monitoring.alert_enabled', True)
+
     # 日志配置
-    config.set('logging.level', 'INFO')
-    config.set('logging.file', '/var/log/simtradedata.log')
-    
+    config.set('logging.level', 'WARNING')
+    config.set('logging.file_path', '/var/log/simtradedata/simtradedata.log')
+    config.set('logging.structured_logging', True)
+
     return config
+```
+
+### 生产环境部署步骤
+
+详细步骤请参考 [生产部署指南](PRODUCTION_DEPLOYMENT_GUIDE.md)，快速步骤如下：
+
+```bash
+# 1. 克隆项目
+git clone <repo> /opt/simtradedata/app
+cd /opt/simtradedata/app
+
+# 2. 安装依赖
+poetry install --no-dev
+
+# 3. 配置生产环境
+cp config.example.yaml config.yaml
+# 编辑 config.yaml，设置 use_production_config: true
+
+# 4. 初始化数据库
+poetry run python -m simtradedata.cli init
+
+# 5. 配置systemd服务
+sudo cp systemd/simtradedata.service /etc/systemd/system/
+sudo systemctl enable simtradedata
+sudo systemctl start simtradedata
+
+# 6. 验证部署
+sudo systemctl status simtradedata
 ```
 
 ### Docker部署

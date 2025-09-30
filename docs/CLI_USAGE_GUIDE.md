@@ -179,6 +179,65 @@ poetry run python -m simtradedata full-sync --verbose
 poetry run python -m simtradedata incremental --start-date 2024-01-01 --quiet
 ```
 
+### 监控和告警
+
+```bash
+# 检查告警状态
+poetry run python -m simtradedata.monitoring.alert_system check
+
+# 获取数据质量报告
+poetry run python -m simtradedata.monitoring.data_quality report
+
+# 查看激活的告警
+poetry run python -c "
+from simtradedata.database import DatabaseManager
+from simtradedata.monitoring import AlertSystem
+db = DatabaseManager('data/simtradedata.db')
+alerts = AlertSystem(db)
+summary = alerts.get_alert_summary()
+print(f'激活告警: {summary[\"active_alerts_count\"]}个')
+"
+
+# 测试所有告警规则
+poetry run python -c "
+from simtradedata.database import DatabaseManager
+from simtradedata.monitoring import AlertSystem, AlertRuleFactory
+db = DatabaseManager('data/simtradedata.db')
+alert_system = AlertSystem(db)
+rules = AlertRuleFactory.create_all_default_rules(db)
+for rule in rules:
+    alert_system.add_rule(rule)
+triggered = alert_system.check_all_rules()
+print(f'触发告警: {len(triggered)}个')
+"
+```
+
+### 生产环境命令
+
+```bash
+# 使用生产配置启动
+poetry run python -m simtradedata.cli serve --config production_config.yaml
+
+# 健康检查
+poetry run python -m simtradedata.cli health-check
+
+# 数据库优化（生产环境）
+poetry run python -c "
+from simtradedata.database import DatabaseManager
+db = DatabaseManager('data/simtradedata.db')
+db.execute('VACUUM;')  # 压缩数据库
+db.execute('ANALYZE;')  # 更新统计信息
+"
+
+# 查看性能统计
+poetry run python -c "
+from simtradedata.preprocessor.indicators import TechnicalIndicators
+ind = TechnicalIndicators()
+stats = ind.get_cache_stats()
+print(f'缓存大小: {stats[\"cache_size\"]}/{stats[\"cache_max_size\"]}')
+"
+```
+
 ## 🚨 故障排除
 
 ### 常见问题和解决方案
@@ -222,10 +281,10 @@ poetry run python -m simtradedata gap-fix --start-date 2024-01-01 --end-date $(d
 
 ## 📚 更多信息
 
-- [API 参考文档](API_REFERENCE.md)
-- [开发者指南](DEVELOPER_GUIDE.md)
-- [用户指南](USER_GUIDE.md)
-- [架构指南](Architecture_Guide.md)
+- [生产部署指南](PRODUCTION_DEPLOYMENT_GUIDE.md) - 完整的生产环境配置和部署指南
+- [API 参考文档](API_REFERENCE.md) - API接口详细文档
+- [开发者指南](DEVELOPER_GUIDE.md) - 开发者扩展开发指南
+- [架构指南](Architecture_Guide.md) - 系统架构和设计文档
 
 ## 🆘 获取帮助
 
