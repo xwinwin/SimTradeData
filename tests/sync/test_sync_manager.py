@@ -949,5 +949,942 @@ class TestIsValidFinancialDataRelaxed:
         )
 
 
+class TestClearCache:
+    """测试缓存清理"""
+
+    def test_clear_cache(self, mock_components):
+        """测试清理缓存功能"""
+        db_manager, data_source_manager, processing_engine, config = mock_components
+        manager = SyncManager(
+            db_manager, data_source_manager, processing_engine, config
+        )
+
+        # 先填充缓存
+        manager._determine_market("600000")
+        manager._determine_market("000001")
+        assert manager.get_cache_stats()["market_cache_size"] == 2
+
+        # 清理缓存
+        manager.clear_cache()
+        assert manager.get_cache_stats()["market_cache_size"] == 0
+
+
+class TestGenerateSyncReport:
+    """测试生成同步报告"""
+
+    def test_generate_sync_report(self, mock_components):
+        """测试生成同步报告"""
+        db_manager, data_source_manager, processing_engine, config = mock_components
+        manager = SyncManager(
+            db_manager, data_source_manager, processing_engine, config
+        )
+
+        full_result = {
+            "start_time": "2024-01-15T10:00:00",
+            "target_date": "2024-01-15",
+            "duration_seconds": 120.5,
+            "summary": {
+                "total_phases": 4,
+                "successful_phases": 3,
+                "failed_phases": 1,
+            },
+            "phases": {
+                "incremental_sync": {
+                    "status": "completed",
+                    "result": {
+                        "total_symbols": 100,
+                        "success_count": 95,
+                        "error_count": 5,
+                    },
+                }
+            },
+        }
+
+        report = manager.generate_sync_report(full_result)
+
+        assert "数据同步报告" in report
+        assert "2024-01-15" in report
+        assert "120.50 秒" in report
+        assert "总阶段数: 4" in report
+        assert "成功阶段: 3" in report
+        assert "失败阶段: 1" in report
+        assert "增量同步" in report
+        assert "总股票数: 100" in report
+
+
+class TestLogDataFailureWithContext:
+    """测试带上下文的数据失败日志"""
+
+    def test_log_failure_unlisted_stock(self, mock_components):
+        """测试未上市股票的失败日志"""
+        db_manager, data_source_manager, processing_engine, config = mock_components
+        manager = SyncManager(
+            db_manager, data_source_manager, processing_engine, config
+        )
+
+        # Mock 数据源返回未上市股票信息
+        data_source_manager.get_stock_info.return_value = {
+            "success": True,
+            "data": {"list_date": "2025-03-01"},  # 未来上市日期
+        }
+
+        target_date = date(2024, 1, 15)
+        # 不应抛出异常
+        manager._log_data_failure_with_context(
+            "000001.SZ", target_date, ["财务数据", "估值数据"]
+        )
+
+    def test_log_failure_listed_stock(self, mock_components):
+        """测试已上市股票的失败日志"""
+        db_manager, data_source_manager, processing_engine, config = mock_components
+        manager = SyncManager(
+            db_manager, data_source_manager, processing_engine, config
+        )
+
+        # Mock 数据源返回已上市股票信息
+        data_source_manager.get_stock_info.return_value = {
+            "success": True,
+            "data": {"list_date": "2020-01-01"},  # 过去上市日期
+        }
+
+        target_date = date(2024, 1, 15)
+        # 不应抛出异常
+        manager._log_data_failure_with_context("000001.SZ", target_date, ["财务数据"])
+
+    def test_log_failure_no_stock_info(self, mock_components):
+        """测试无法获取股票信息的失败日志"""
+        db_manager, data_source_manager, processing_engine, config = mock_components
+        manager = SyncManager(
+            db_manager, data_source_manager, processing_engine, config
+        )
+
+        # Mock 数据源返回空信息
+        data_source_manager.get_stock_info.return_value = None
+
+        target_date = date(2024, 1, 15)
+        # 不应抛出异常
+        manager._log_data_failure_with_context("000001.SZ", target_date, ["估值数据"])
+
+
+class TestAutoFixGaps:
+    """测试自动修复缺口"""
+
+    def test_auto_fix_gaps_success(self, real_db_components):
+        """测试成功修复缺口"""
+        db_manager, data_source_manager, processing_engine, config = real_db_components
+
+        # 插入股票信息
+        db_manager.execute(
+            "INSERT INTO stocks (symbol, name, market, status, list_date) VALUES (?, ?, ?, ?, ?)",
+            ("000001.SZ", "平安银行", "SZ", "active", "2020-01-01"),
+        )
+
+        # Mock 缺口数据
+        gap_result = {
+            "summary": {"total_gaps": 2},
+            "gaps_by_frequency": {
+                "1d": {
+                    "gaps": [
+                        {
+                            "symbol": "000001.SZ",
+                            "start_date": "2024-01-10",
+                            "end_date": "2024-01-12",
+                            "frequency": "1d",
+                        },
+                    ]
+                }
+            },
+        }
+
+        # Mock 数据源和处理引擎
+        data_source_manager.get_daily_data.return_value = {
+            "data": [
+                {"symbol": "000001.SZ", "date": "2024-01-10", "close": 10.0},
+                {"symbol": "000001.SZ", "date": "2024-01-11", "close": 10.5},
+            ]
+        }
+        processing_engine.process_symbol_data.return_value = {"records": 2}
+
+        manager = SyncManager(
+            db_manager, data_source_manager, processing_engine, config
+        )
+        result = manager._auto_fix_gaps(gap_result)
+
+        assert result["total_gaps"] == 2
+        assert result["attempted_fixes"] == 1
+        assert result["successful_fixes"] == 1
+        assert result["failed_fixes"] == 0
+
+    def test_auto_fix_gaps_before_list_date(self, real_db_components):
+        """测试跳过上市日期前的缺口"""
+        db_manager, data_source_manager, processing_engine, config = real_db_components
+
+        # 插入股票信息（上市日期较晚）
+        db_manager.execute(
+            "INSERT INTO stocks (symbol, name, market, status, list_date) VALUES (?, ?, ?, ?, ?)",
+            ("000001.SZ", "平安银行", "SZ", "active", "2024-02-01"),  # 上市日期较晚
+        )
+
+        # Mock 缺口数据（缺口在上市日期之前）
+        gap_result = {
+            "summary": {"total_gaps": 1},
+            "gaps_by_frequency": {
+                "1d": {
+                    "gaps": [
+                        {
+                            "symbol": "000001.SZ",
+                            "start_date": "2024-01-10",  # 早于上市日期
+                            "end_date": "2024-01-12",
+                            "frequency": "1d",
+                        },
+                    ]
+                }
+            },
+        }
+
+        manager = SyncManager(
+            db_manager, data_source_manager, processing_engine, config
+        )
+        result = manager._auto_fix_gaps(gap_result)
+
+        assert result["total_gaps"] == 1
+        assert result["skipped_fixes"] == 1  # 应被跳过
+        assert result["attempted_fixes"] == 0
+
+    def test_auto_fix_gaps_no_gaps(self, mock_components):
+        """测试无缺口情况"""
+        db_manager, data_source_manager, processing_engine, config = mock_components
+        manager = SyncManager(
+            db_manager, data_source_manager, processing_engine, config
+        )
+
+        gap_result = {"summary": {"total_gaps": 0}, "gaps_by_frequency": {}}
+
+        result = manager._auto_fix_gaps(gap_result)
+
+        assert result["total_gaps"] == 0
+        assert result["attempted_fixes"] == 0
+
+
+class TestSafeExtractNumber:
+    """测试安全数字提取的更多边界情况"""
+
+    def test_extract_special_values(self, mock_components):
+        """测试特殊值"""
+        db_manager, data_source_manager, processing_engine, config = mock_components
+        manager = SyncManager(
+            db_manager, data_source_manager, processing_engine, config
+        )
+
+        assert manager._safe_extract_number("nan") is None
+        assert manager._safe_extract_number("null") is None
+        assert manager._safe_extract_number("none") is None
+        assert manager._safe_extract_number("-") is None
+        assert manager._safe_extract_number("--") is None
+
+    def test_extract_empty_string(self, mock_components):
+        """测试空字符串"""
+        db_manager, data_source_manager, processing_engine, config = mock_components
+        manager = SyncManager(
+            db_manager, data_source_manager, processing_engine, config
+        )
+
+        assert manager._safe_extract_number("") is None
+        assert manager._safe_extract_number("   ") is None
+
+
+class TestSafeExtractDate:
+    """测试日期提取的更多边界情况"""
+
+    def test_extract_various_formats(self, mock_components):
+        """测试各种日期格式"""
+        db_manager, data_source_manager, processing_engine, config = mock_components
+        manager = SyncManager(
+            db_manager, data_source_manager, processing_engine, config
+        )
+
+        assert manager._safe_extract_date("2024-1-5") == "2024-01-05"
+        assert manager._safe_extract_date("2024/1/5") == "2024-01-05"
+
+    def test_extract_invalid_formats(self, mock_components):
+        """测试无效日期格式"""
+        db_manager, data_source_manager, processing_engine, config = mock_components
+        manager = SyncManager(
+            db_manager, data_source_manager, processing_engine, config
+        )
+
+        assert manager._safe_extract_date("2024-99-99") is None
+        assert manager._safe_extract_date("not a date") is None
+        assert manager._safe_extract_date("") is None
+
+
+class TestDetermineMarket:
+    """测试市场判断的边界情况"""
+
+    def test_determine_market_with_suffix(self, mock_components):
+        """测试带后缀的股票代码"""
+        db_manager, data_source_manager, processing_engine, config = mock_components
+        manager = SyncManager(
+            db_manager, data_source_manager, processing_engine, config
+        )
+
+        assert manager._determine_market("600000.SS") == "SS"
+        assert manager._determine_market("000001.SZ") == "SZ"
+
+    def test_determine_market_invalid_input(self, mock_components):
+        """测试无效输入"""
+        db_manager, data_source_manager, processing_engine, config = mock_components
+        manager = SyncManager(
+            db_manager, data_source_manager, processing_engine, config
+        )
+
+        assert manager._determine_market("") == "SZ"  # 默认深圳
+        assert manager._determine_market(None) == "SZ"
+        assert manager._determine_market("INVALID") == "SZ"
+
+
+class TestSyncSingleSymbolWithTransaction:
+    """测试单股票同步的事务保护"""
+
+    def test_sync_symbol_already_completed(self, real_db_components):
+        """测试已完成股票的处理"""
+        db_manager, data_source_manager, processing_engine, config = real_db_components
+
+        symbol = "000001.SZ"
+        target_date = date(2024, 1, 15)
+
+        # 标记为已完成
+        db_manager.execute(
+            "INSERT INTO extended_sync_status (symbol, sync_type, target_date, status) VALUES (?, ?, ?, ?)",
+            (symbol, "extended_data", str(target_date), "completed"),
+        )
+
+        manager = SyncManager(
+            db_manager, data_source_manager, processing_engine, config
+        )
+        result = manager._sync_single_symbol_with_transaction(
+            symbol, target_date, "test_session"
+        )
+
+        assert result["success"] is True
+        assert result["financials_count"] == 0
+        assert result["valuations_count"] == 0
+
+    def test_sync_symbol_transaction_rollback(self, real_db_components):
+        """测试事务回滚"""
+        db_manager, data_source_manager, processing_engine, config = real_db_components
+
+        symbol = "000001.SZ"
+        target_date = date(2024, 1, 15)
+
+        # Mock 数据源抛出异常
+        data_source_manager.get_fundamentals.side_effect = Exception("数据源错误")
+
+        manager = SyncManager(
+            db_manager, data_source_manager, processing_engine, config
+        )
+        result = manager._sync_single_symbol_with_transaction(
+            symbol, target_date, "test_session"
+        )
+
+        assert result["success"] is False
+
+
+class TestRunFullSync:
+    """测试run_full_sync完整流程"""
+
+    def test_run_full_sync_with_default_params(self, real_db_components):
+        """测试使用默认参数的完整同步"""
+        db_manager, data_source_manager, processing_engine, config = real_db_components
+
+        # 创建market_data表
+        db_manager.execute(
+            """
+            CREATE TABLE IF NOT EXISTS market_data (
+                symbol TEXT NOT NULL,
+                date DATE NOT NULL,
+                frequency TEXT NOT NULL DEFAULT '1d',
+                open REAL,
+                high REAL,
+                low REAL,
+                close REAL,
+                volume REAL,
+                amount REAL,
+                prev_close REAL,
+                change_percent REAL,
+                turnover_rate REAL,
+                quality_score INTEGER DEFAULT 100,
+                source TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY (symbol, date, frequency)
+            )
+        """
+        )
+
+        # 插入测试股票
+        db_manager.executemany(
+            "INSERT INTO stocks (symbol, name, market, status) VALUES (?, ?, ?, ?)",
+            [
+                ("000001.SZ", "平安银行", "SZ", "active"),
+                ("000002.SZ", "万科A", "SZ", "active"),
+            ],
+        )
+
+        # Mock所有必要的数据源调用
+        data_source_manager.get_trade_calendar.return_value = {
+            "success": True,
+            "data": [
+                {"trade_date": "2024-01-01", "is_trading": True},
+            ],
+        }
+
+        baostock_source = Mock()
+        baostock_source.is_connected.return_value = True
+        baostock_source.get_stock_info.return_value = []  # 空列表跳过更新
+        data_source_manager.get_source.return_value = baostock_source
+
+        # Mock增量同步
+        incremental_mock = Mock()
+        incremental_mock.sync_all_symbols.return_value = {
+            "success_count": 2,
+            "error_count": 0,
+        }
+
+        manager = SyncManager(
+            db_manager, data_source_manager, processing_engine, config
+        )
+        manager.incremental_sync = incremental_mock
+
+        # 执行完整同步
+        response = manager.run_full_sync()
+
+        # run_full_sync被@unified_error_handler装饰，返回 {success, data}
+        assert response["success"] is True
+        result = response["data"]
+
+        # 验证结果结构
+        assert "target_date" in result
+        assert "start_time" in result
+        assert "phases" in result
+        assert "summary" in result
+
+        # 验证阶段统计
+        assert result["summary"]["total_phases"] >= 0
+        assert result["summary"]["successful_phases"] >= 0
+
+    def test_run_full_sync_with_future_date(self, real_db_components):
+        """测试目标日期为未来时自动调整为今天"""
+        db_manager, data_source_manager, processing_engine, config = real_db_components
+
+        # 创建market_data表
+        db_manager.execute(
+            """
+            CREATE TABLE IF NOT EXISTS market_data (
+                symbol TEXT NOT NULL,
+                date DATE NOT NULL,
+                frequency TEXT NOT NULL DEFAULT '1d',
+                open REAL,
+                close REAL,
+                PRIMARY KEY (symbol, date, frequency)
+            )
+        """
+        )
+
+        # 插入测试股票
+        db_manager.execute(
+            "INSERT INTO stocks (symbol, name, market, status) VALUES (?, ?, ?, ?)",
+            ("000001.SZ", "平安银行", "SZ", "active"),
+        )
+
+        # Mock所有必要调用
+        data_source_manager.get_trade_calendar.return_value = {
+            "success": True,
+            "data": [],
+        }
+        baostock_source = Mock()
+        baostock_source.is_connected.return_value = True
+        baostock_source.get_stock_info.return_value = []
+        data_source_manager.get_source.return_value = baostock_source
+
+        incremental_mock = Mock()
+        incremental_mock.sync_all_symbols.return_value = {
+            "success_count": 1,
+            "error_count": 0,
+        }
+
+        manager = SyncManager(
+            db_manager, data_source_manager, processing_engine, config
+        )
+        manager.incremental_sync = incremental_mock
+
+        # 使用未来日期
+        future_date = date.today() + timedelta(days=10)
+        response = manager.run_full_sync(target_date=future_date)
+
+        assert response["success"] is True
+        result = response["data"]
+
+        # 验证日期被调整为今天
+        assert result["target_date"] == str(date.today())
+
+    def test_run_full_sync_resume_all_completed(self, real_db_components):
+        """测试断点续传 - 所有数据已完成"""
+        db_manager, data_source_manager, processing_engine, config = real_db_components
+
+        # 插入股票和完成状态
+        symbols = ["000001.SZ", "000002.SZ"]
+        target_date = date(2024, 1, 15)
+
+        for symbol in symbols:
+            db_manager.execute(
+                "INSERT INTO stocks (symbol, name, market, status) VALUES (?, ?, ?, ?)",
+                (symbol, f"股票{symbol}", "SZ", "active"),
+            )
+            # 插入财务数据
+            db_manager.execute(
+                "INSERT INTO financials (symbol, report_date, report_type, revenue, source) VALUES (?, ?, ?, ?, ?)",
+                (symbol, f"{target_date.year - 1}-12-31", "Q4", 1000000.0, "test"),
+            )
+            # 标记为完成
+            db_manager.execute(
+                "INSERT INTO extended_sync_status (symbol, sync_type, target_date, status) VALUES (?, ?, ?, ?)",
+                (symbol, "extended_data", str(target_date), "completed"),
+            )
+
+        manager = SyncManager(
+            db_manager, data_source_manager, processing_engine, config
+        )
+
+        response = manager.run_full_sync(target_date=target_date)
+
+        assert response["success"] is True
+        result = response["data"]
+
+        # 验证跳过了整个流程
+        assert result["phases"].get("all_completed") is not None
+        assert result["phases"]["all_completed"]["status"] == "completed"
+
+    def test_run_full_sync_resume_partial(self, real_db_components):
+        """测试断点续传 - 部分数据完成"""
+        db_manager, data_source_manager, processing_engine, config = real_db_components
+
+        # 创建market_data表
+        db_manager.execute(
+            """
+            CREATE TABLE IF NOT EXISTS market_data (
+                symbol TEXT NOT NULL,
+                date DATE NOT NULL,
+                frequency TEXT NOT NULL DEFAULT '1d',
+                open REAL,
+                close REAL,
+                PRIMARY KEY (symbol, date, frequency)
+            )
+        """
+        )
+
+        # 插入股票，部分完成
+        symbols = ["000001.SZ", "000002.SZ", "000003.SZ"]
+        target_date = date(2024, 1, 15)
+
+        for symbol in symbols:
+            db_manager.execute(
+                "INSERT INTO stocks (symbol, name, market, status) VALUES (?, ?, ?, ?)",
+                (symbol, f"股票{symbol}", "SZ", "active"),
+            )
+
+        # 只有第一只股票完成
+        db_manager.execute(
+            "INSERT INTO financials (symbol, report_date, report_type, revenue, source) VALUES (?, ?, ?, ?, ?)",
+            (symbols[0], f"{target_date.year - 1}-12-31", "Q4", 1000000.0, "test"),
+        )
+        db_manager.execute(
+            "INSERT INTO extended_sync_status (symbol, sync_type, target_date, status) VALUES (?, ?, ?, ?)",
+            (symbols[0], "extended_data", str(target_date), "completed"),
+        )
+
+        # Mock数据源
+        data_source_manager.get_fundamentals.return_value = {
+            "success": False,
+            "data": None,
+        }
+        data_source_manager.get_valuation_data.return_value = {
+            "success": False,
+            "data": None,
+        }
+
+        manager = SyncManager(
+            db_manager, data_source_manager, processing_engine, config
+        )
+
+        response = manager.run_full_sync(target_date=target_date, symbols=symbols)
+
+        assert response["success"] is True
+        result = response["data"]
+
+        # 验证断点续传逻辑
+        assert "phases" in result
+        # 应该跳过部分阶段并直接进入扩展数据同步
+        assert result["phases"].get("calendar_update", {}).get("status") in [
+            "skipped",
+            "completed",
+        ]
+
+
+class TestSyncExtendedData:
+    """测试扩展数据同步"""
+
+    def test_sync_extended_data_empty_symbols(self, real_db_components):
+        """测试空股票列表"""
+        db_manager, data_source_manager, processing_engine, config = real_db_components
+
+        manager = SyncManager(
+            db_manager, data_source_manager, processing_engine, config
+        )
+        result = manager._sync_extended_data([], date(2024, 1, 15), None)
+
+        assert result["processed_symbols"] == 0
+        assert result["failed_symbols"] == 0
+
+    def test_sync_extended_data_batch_mode(self, real_db_components):
+        """测试批量模式决策"""
+        db_manager, data_source_manager, processing_engine, config = real_db_components
+
+        # 插入足够多的股票以触发批量模式
+        for i in range(1, 600):
+            code = f"{i:06d}"
+            symbol = f"{code}.SZ"
+            db_manager.execute(
+                "INSERT INTO stocks (symbol, name, market, status) VALUES (?, ?, ?, ?)",
+                (symbol, f"股票{i}", "SZ", "active"),
+            )
+
+        # Mock批量导入成功且返回数据
+        data_source_manager.batch_import_financial_data.return_value = {
+            "success": True,
+            "data": {
+                "data": [
+                    {
+                        "symbol": f"{i:06d}.SZ",
+                        "report_date": "2023-12-31",
+                        "report_type": "Q4",
+                        "data": {"revenue": 1000000.0},
+                    }
+                    for i in range(1, 51)
+                ]
+            },
+        }
+
+        data_source_manager.get_fundamentals.return_value = {
+            "success": False,
+            "data": None,
+        }
+        data_source_manager.get_valuation_data.return_value = {
+            "success": False,
+            "data": None,
+        }
+
+        manager = SyncManager(
+            db_manager, data_source_manager, processing_engine, config
+        )
+
+        symbols = [f"{i:06d}.SZ" for i in range(1, 51)]  # 50只股票
+        result = manager._sync_extended_data(symbols, date(2024, 1, 15), None)
+
+        # 应该启用批量模式
+        assert result["batch_mode"] is True
+
+
+class TestExtendedSyncErrorHandling:
+    """测试扩展数据同步的异常处理"""
+
+    def test_run_full_sync_extended_data_exception(self, real_db_components):
+        """测试断点续传中扩展数据同步抛出异常"""
+        db_manager, data_source_manager, processing_engine, config = real_db_components
+
+        # 插入股票和部分完成状态
+        symbols = ["000001.SZ", "000002.SZ"]
+        target_date = date(2024, 1, 15)
+
+        for symbol in symbols:
+            db_manager.execute(
+                "INSERT INTO stocks (symbol, name, market, status) VALUES (?, ?, ?, ?)",
+                (symbol, "测试股票", "SZ", "active"),
+            )
+
+        # 只标记第一只为完成,触发断点续传(不会跳过所有阶段)
+        db_manager.execute(
+            "INSERT INTO extended_sync_status (symbol, sync_type, target_date, status) VALUES (?, ?, ?, ?)",
+            (symbols[0], "extended_data", str(target_date), "completed"),
+        )
+
+        # Mock扩展数据同步抛出异常
+        manager = SyncManager(
+            db_manager, data_source_manager, processing_engine, config
+        )
+
+        # 修改_sync_extended_data使其抛出异常
+        def mock_sync_extended_data(*args, **kw):
+            raise Exception("扩展数据同步失败")
+
+        manager._sync_extended_data = mock_sync_extended_data
+
+        # 执行同步
+        response = manager.run_full_sync(target_date=target_date, symbols=symbols)
+
+        # 验证错误被捕获
+        assert response["success"] is True
+        result = response["data"]
+        # 验证异常被记录在扩展数据同步阶段
+        assert "extended_data_sync" in result["phases"]
+        assert result["phases"]["extended_data_sync"]["status"] == "failed"
+
+
+class TestGetSyncStatus:
+    """测试获取同步状态"""
+
+    def test_get_sync_status_exception(self, real_db_components):
+        """测试获取同步状态时发生异常"""
+        db_manager, data_source_manager, processing_engine, config = real_db_components
+
+        manager = SyncManager(
+            db_manager, data_source_manager, processing_engine, config
+        )
+
+        # 删除market_data表以触发异常
+        db_manager.execute("DROP TABLE IF EXISTS market_data")
+
+        result = manager.get_sync_status()
+
+        # 应该返回失败结果而不是抛出异常
+        assert result["success"] is False
+        assert "error" in result
+
+
+class TestUpdateStockListEdgeCases:
+    """测试股票列表更新的边界情况"""
+
+    def test_update_stock_list_invalid_stock_data(self, real_db_components):
+        """测试处理无效股票数据"""
+        db_manager, data_source_manager, processing_engine, config = real_db_components
+
+        baostock_source = Mock()
+        baostock_source.is_connected.return_value = True
+        # 返回包含无效数据的列表
+        baostock_source.get_stock_info.return_value = [
+            "not_a_dict",  # 无效：字符串
+            123,  # 无效：数字
+            {"symbol": "", "name": ""},  # 无效：空symbol和name
+            {"symbol": "000001", "name": "正常股票", "market": "SZ"},  # 有效
+        ]
+        data_source_manager.get_source.return_value = baostock_source
+
+        manager = SyncManager(
+            db_manager, data_source_manager, processing_engine, config
+        )
+        result = manager._update_stock_list(date(2024, 1, 15))
+
+        # 应该只插入有效的股票
+        assert result["status"] == "completed"
+        assert result["new_stocks"] >= 0
+        assert result["failed_stocks"] >= 2  # 至少2个无效数据
+
+
+class TestUpdateCalendarEdgeCases:
+    """测试交易日历更新的边界情况"""
+
+    def test_update_calendar_data_source_failure(self, real_db_components):
+        """测试数据源返回失败"""
+        db_manager, data_source_manager, processing_engine, config = real_db_components
+
+        # Mock 数据源返回失败
+        data_source_manager.get_trade_calendar.return_value = {
+            "success": False,
+            "message": "数据源不可用",
+        }
+
+        manager = SyncManager(
+            db_manager, data_source_manager, processing_engine, config
+        )
+        result = manager._update_trading_calendar(date(2024, 1, 15))
+
+        # 应该没有插入任何记录
+        assert result["updated_records"] == 0
+
+    def test_update_calendar_nested_data_structure(self, real_db_components):
+        """测试多层嵌套的数据结构"""
+        db_manager, data_source_manager, processing_engine, config = real_db_components
+
+        # Mock 三层嵌套的数据结构
+        data_source_manager.get_trade_calendar.return_value = {
+            "success": True,
+            "data": {
+                "success": True,
+                "data": {
+                    "success": True,
+                    "data": [
+                        {"trade_date": "2024-01-01", "is_trading": False},
+                        {"trade_date": "2024-01-02", "is_trading": True},
+                    ],
+                },
+            },
+        }
+
+        manager = SyncManager(
+            db_manager, data_source_manager, processing_engine, config
+        )
+        result = manager._update_trading_calendar(date(2024, 1, 15))
+
+        # 应该正确解包并插入数据
+        assert result["status"] == "completed"
+        assert result["updated_records"] >= 2
+
+
+class TestBatchImportFallback:
+    """测试批量导入回退机制"""
+
+    def test_batch_import_non_dict_response(self, real_db_components):
+        """测试批量导入返回非字典类型"""
+        db_manager, data_source_manager, processing_engine, config = real_db_components
+
+        # 插入足够多股票触发批量模式
+        for i in range(1, 600):
+            db_manager.execute(
+                "INSERT INTO stocks (symbol, name, market, status) VALUES (?, ?, ?, ?)",
+                (f"{i:06d}.SZ", f"股票{i}", "SZ", "active"),
+            )
+
+        # Mock 批量导入返回非字典类型
+        data_source_manager.batch_import_financial_data.return_value = (
+            "invalid_response"
+        )
+
+        data_source_manager.get_fundamentals.return_value = {
+            "success": False,
+            "data": None,
+        }
+        data_source_manager.get_valuation_data.return_value = {
+            "success": False,
+            "data": None,
+        }
+
+        manager = SyncManager(
+            db_manager, data_source_manager, processing_engine, config
+        )
+
+        symbols = [f"{i:06d}.SZ" for i in range(1, 51)]
+        result = manager._sync_extended_data(symbols, date(2024, 1, 15), None)
+
+        # 应该回退到逐个模式
+        assert result["batch_mode"] is False
+
+    def test_batch_import_exception(self, real_db_components):
+        """测试批量导入抛出异常时回退"""
+        db_manager, data_source_manager, processing_engine, config = real_db_components
+
+        # 插入足够多股票
+        for i in range(1, 600):
+            db_manager.execute(
+                "INSERT INTO stocks (symbol, name, market, status) VALUES (?, ?, ?, ?)",
+                (f"{i:06d}.SZ", f"股票{i}", "SZ", "active"),
+            )
+
+        # Mock 批量导入抛出异常
+        data_source_manager.batch_import_financial_data.side_effect = Exception(
+            "批量导入失败"
+        )
+
+        data_source_manager.get_fundamentals.return_value = {
+            "success": False,
+            "data": None,
+        }
+        data_source_manager.get_valuation_data.return_value = {
+            "success": False,
+            "data": None,
+        }
+
+        manager = SyncManager(
+            db_manager, data_source_manager, processing_engine, config
+        )
+
+        symbols = [f"{i:06d}.SZ" for i in range(1, 51)]
+        result = manager._sync_extended_data(symbols, date(2024, 1, 15), None)
+
+        # 应该回退到逐个模式
+        assert result["batch_mode"] is False
+
+
+class TestExtendedDataSymbolProcessingErrors:
+    """测试扩展数据符号处理的错误情况"""
+
+    def test_get_extended_data_symbols_exception(self, real_db_components):
+        """测试获取扩展数据符号列表时抛出异常"""
+        db_manager, data_source_manager, processing_engine, config = real_db_components
+
+        manager = SyncManager(
+            db_manager, data_source_manager, processing_engine, config
+        )
+
+        # 删除stocks表以触发异常
+        db_manager.execute("DROP TABLE stocks")
+
+        # 应该抛出异常
+        with pytest.raises(Exception):
+            manager._get_extended_data_symbols_to_process(
+                ["000001.SZ"], date(2024, 1, 15)
+            )
+
+
+class TestRunFullSyncBaseDataUpdateException:
+    """测试基础数据更新异常"""
+
+    def test_base_data_update_exception(self, real_db_components):
+        """测试基础数据更新过程中抛出异常"""
+        db_manager, data_source_manager, processing_engine, config = real_db_components
+
+        # 创建market_data表
+        db_manager.execute(
+            """
+            CREATE TABLE IF NOT EXISTS market_data (
+                symbol TEXT NOT NULL,
+                date DATE NOT NULL,
+                frequency TEXT NOT NULL DEFAULT '1d',
+                close REAL,
+                PRIMARY KEY (symbol, date, frequency)
+            )
+        """
+        )
+
+        # Mock数据源抛出异常
+        data_source_manager.get_trade_calendar.side_effect = Exception("日历更新失败")
+
+        manager = SyncManager(
+            db_manager, data_source_manager, processing_engine, config
+        )
+
+        response = manager.run_full_sync()
+
+        assert response["success"] is True
+        result = response["data"]
+
+        # 验证异常被记录
+        assert "base_data_update" in result["phases"]
+        assert "error" in result["phases"]["base_data_update"]
+
+
+class TestDetermineMarketDefaultBehavior:
+    """测试市场判断的默认行为"""
+
+    def test_determine_market_non_digit_code(self, mock_components):
+        """测试非数字代码返回默认市场"""
+        db_manager, data_source_manager, processing_engine, config = mock_components
+        manager = SyncManager(
+            db_manager, data_source_manager, processing_engine, config
+        )
+
+        # 非数字代码应返回默认市场(SZ)
+        assert manager._determine_market("ABC123") == "SZ"
+        assert manager._determine_market("@#$%") == "SZ"
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
