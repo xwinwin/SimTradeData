@@ -45,7 +45,7 @@ class TestIncrementalSync:
 
         assert sync.db_manager is db_manager
         assert sync.data_source_manager is data_source_manager
-        assert sync.preprocessor is preprocessor
+        assert sync.processing_engine is preprocessor
         assert sync.config is config
 
         logger.info("✅ 增量同步器初始化测试通过")
