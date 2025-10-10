@@ -210,3 +210,4 @@ __marimo__/
 .pytest_cache/
 data/
 *.json
+CLAUDE*.md
