@@ -1,12 +1,26 @@
-# SimTradeData - 高性能金融数据系统
+# SimTradeData - 仿真交易数据支持库
 
-> 🎯 **零技术债务的全新架构** | 📊 **完整PTrade API支持** | 🚀 **生产就绪**
+> 🎯 **为 SimTradeLab 和 SimTradeML 提供数据支持** | 📊 **高质量金融数据** | 🚀 **生产就绪**
+
+**SimTradeData** 是为 [SimTradeLab](https://github.com/kayou/SimTradeLab) 以及 SimTradeML 项目提供数据支持的配套工具库。它致力于构建、管理和提供高质量的仿真交易数据，以支撑模型开发、回测和性能评估等工作。
+
+## 🎯 核心价值
+
+- **📦 专为仿真交易设计** - 针对量化策略回测和模型训练的数据需求优化
+- **🔄 智能数据同步** - 自动化的历史数据回填、增量更新、缺口修复
+- **🎨 零冗余架构** - 精心设计的数据库结构，高效存储和快速查询
+- **📊 多数据源融合** - BaoStock、Mootdx、QStock 智能切换，确保数据可用性
+- **⚡ 生产级性能** - 缓存优化、并发处理，支持大规模数据查询
 
 ## 🚀 快速开始
 
 ### 1. 安装依赖
 ```bash
-# 安装项目依赖
+# 克隆项目
+git clone <repository-url>
+cd SimTradeData
+
+# 安装依赖
 poetry install
 
 # 激活虚拟环境
@@ -19,7 +33,19 @@ poetry shell
 poetry run python scripts/init_database.py --db-path data/simtradedata.db
 ```
 
-### 3. 开始使用
+### 3. 同步数据
+```bash
+# 同步指定股票的历史数据
+poetry run python -m simtradedata full-sync --symbols 000001.SZ --target-date 2024-01-01
+
+# 增量更新最近数据
+poetry run python -m simtradedata incremental --start-date 2024-01-01 --end-date 2024-01-31
+
+# 检测并修复数据缺口
+poetry run python -m simtradedata gap-fix --start-date 2024-01-01
+```
+
+### 4. 在代码中使用
 ```python
 from simtradedata.database.manager import DatabaseManager
 from simtradedata.api.router import APIRouter
@@ -37,9 +63,12 @@ data = api_router.get_history(
     end_date="2024-01-31",
     frequency="1d"
 )
+
+# 在 SimTradeLab 回测中使用
+# (详见 SimTradeLab 文档)
 ```
 
-### 4. 运行测试 ✅
+### 5. 运行测试 ✅
 ```bash
 # 运行全部测试 (100% 通过率)
 poetry run pytest
@@ -80,71 +109,150 @@ poetry run pytest -m performance  # 性能测试
 
 > 📋 **归档文档**: 历史设计文档和研究报告已移至 [docs/archive/](docs/archive/)
 
+## 💼 应用场景
+
+### 在 SimTradeLab 中使用
+
+SimTradeData 为 SimTradeLab 提供完整的历史数据支持：
+
+```python
+# SimTradeLab 策略回测示例
+from simtradedata.api import APIRouter
+
+# 获取回测所需的历史数据
+api_router = APIRouter(db_manager, config)
+backtest_data = api_router.get_history(
+    symbols=["000001.SZ", "600000.SS"],
+    start_date="2023-01-01",
+    end_date="2023-12-31",
+    frequency="1d"
+)
+
+# 传递给 SimTradeLab 策略引擎进行回测
+# (具体用法参见 SimTradeLab 文档)
+```
+
+### 在 SimTradeML 中使用
+
+为机器学习模型提供训练和验证数据：
+
+```python
+# 获取特征工程所需的数据
+from simtradedata.sync import SyncManager
+
+# 确保数据完整性
+sync_manager = SyncManager(db_manager, data_source_manager)
+sync_manager.historical_backfill(symbol="000001.SZ", target_date="2020-01-01")
+
+# 获取用于模型训练的数据
+training_data = api_router.get_history(
+    symbols=["000001.SZ"],
+    start_date="2020-01-01",
+    end_date="2023-12-31",
+    frequency="1d"
+)
+```
+
+### 独立使用
+
+作为独立的金融数据管理工具：
+
+```bash
+# 定期同步最新数据
+poetry run python -m simtradedata incremental --start-date $(date -d '7 days ago' +%Y-%m-%d)
+
+# 监控数据质量
+poetry run python -m simtradedata status
+
+# 修复历史数据缺口
+poetry run python -m simtradedata gap-fix --start-date 2023-01-01
+```
+
 ## 🎯 核心特性
+
+### 数据管理
+- **智能同步** - 增量更新、历史回填、缺口检测与修复
+- **多数据源** - BaoStock、Mootdx、QStock 自动切换
+- **数据验证** - 完整性检查、质量评分、异常检测
+- **断点续传** - 支持中断后恢复同步
 
 ### 架构优势
 - **零冗余设计** - 完全消除数据重复，每个字段都有唯一存储位置
-- **完整PTrade支持** - 100%支持PTrade API所需的所有字段
-- **智能质量管理** - 实时监控数据源质量和可靠性
-- **高性能架构** - 优化的表结构和索引设计
+- **高性能查询** - 优化的表结构和索引设计，查询速度提升 2-5x
+- **智能缓存** - 多级缓存策略，技术指标计算 434x 性能提升
 - **模块化设计** - 清晰的功能分离，易于维护和扩展
 
-### 性能指标
-- **查询速度**: 提升200-500% (相比传统架构)
-- **存储效率**: 零冗余存储，节省30%空间
-- **数据完整性**: 100%完整的PTrade字段支持
-- **质量监控**: 实时数据源质量评估和动态调整
-- **同步性能**: 600条/秒吞吐量 (6x性能提升)
-- **批量写入**: 批量操作提升400倍写入速度
-- **缓存命中**: 缓存查询提升100倍响应速度
-- **连接管理**: 会话保活减少200倍连接开销
+### 监控运维
+- **数据质量监控** - 实时监控数据源质量和可靠性
+- **告警系统** - 6个内置告警规则，自动检测数据异常
+- **健康检查** - 数据库状态、表完整性、数据覆盖率
+- **性能监控** - 查询性能、缓存命中率、系统资源使用
 
-### 核心组件
-- **11个专用表** - 精心设计的数据库架构，支持多市场多频率数据
-- **APIRouter** - 高性能查询路由器，支持缓存和并发
-- **DataProcessingEngine** - 数据处理引擎，智能数据融合
-- **SyncManager** - 完整的数据同步系统，支持增量更新、历史回填和缺口修复
-- **多数据源适配器** - Mootdx、BaoStock、QStock智能融合
-- **监控告警系统** - 完整的数据质量监控和告警机制
+## 📊 数据库架构
+
+SimTradeData 采用精心设计的 11 表架构，支持多市场、多频率数据：
+
+| 表名 | 功能 | 特点 |
+|------|------|------|
+| `stocks` | 股票基础信息 | 股票代码、名称、市场、行业分类 |
+| `market_data` | 市场行情数据 | OHLCV、多频率（1d/5m/15m/30m/60m） |
+| `valuations` | 估值指标 | 市盈率、市净率、市销率、市现率 |
+| `financials` | 财务数据核心表 | 49个核心财务指标 |
+| `balance_sheet_detail` | 资产负债表 | 110+详细科目（JSON存储） |
+| `income_statement_detail` | 利润表 | 55+详细科目（JSON存储） |
+| `cash_flow_detail` | 现金流量表 | 75+详细科目（JSON存储） |
+| `trading_calendar` | 交易日历 | 开市日期、节假日、停牌信息 |
+| `adjustments` | 复权数据 | 除权除息、股本变动 |
+| `industry_classification` | 行业分类 | 多级行业分类标准 |
+| `data_source_quality` | 数据质量监控 | 数据源质量评分、可靠性追踪 |
+
+完整架构设计请参考 [Architecture_Guide.md](docs/Architecture_Guide.md)
 
 ## 📊 技术对比
 
 | 特性 | 传统方案 | SimTradeData | 优势 |
 |------|----------|--------------|------|
 | 数据冗余 | 30% | 0% | 完全消除 |
-| PTrade支持 | 80% | 100% | 完整支持 |
 | 查询性能 | 基准 | 2-5x | 显著提升 |
+| 数据源管理 | 单一 | 多源融合 | 高可用性 |
 | 质量监控 | 无 | 实时 | 全新功能 |
 | 维护成本 | 高 | 低 | 大幅降低 |
 
+## 🏗️ 核心组件
+
+- **APIRouter** - 高性能查询路由器，支持缓存和并发
+- **SyncManager** - 完整的数据同步系统（增量更新、历史回填、缺口修复）
+- **DataSourceManager** - 多数据源管理器（BaoStock、Mootdx、QStock）
+- **DataQualityMonitor** - 数据质量监控器
+- **AlertSystem** - 告警系统（6个内置规则）
+- **TechnicalIndicators** - 技术指标计算引擎（向量化优化）
+
 ## ✅ 项目状态
 
-### 🏗️ 核心架构 (100% 完成)
-- **数据库设计**: ✅ 11个专用表，零冗余架构
-- **数据源集成**: ✅ 3个数据源适配器，智能故障转移
-- **API路由器**: ✅ 高性能查询引擎，支持缓存和并发
-- **数据同步**: ✅ 增量同步、历史回填、缺口检测、断点续传
+### 核心功能 (100% 完成)
+- ✅ **数据同步** - 增量更新、历史回填、缺口检测、断点续传
+- ✅ **数据查询** - 多市场、多频率、高性能查询
+- ✅ **数据验证** - 完整性检查、质量评分
+- ✅ **监控告警** - 实时监控、自动告警
 
-### 🔧 功能模块 (100% 完成)
-- **历史数据查询**: ✅ 多市场、多频率支持
-- **实时数据接口**: ✅ 快照数据、技术指标
-- **数据预处理**: ✅ 清洗、融合、质量监控
-- **CLI工具**: ✅ 完整的命令行工具集
+### 测试覆盖 (100% 完成)
+- ✅ **466 个测试用例** - 100% 通过率
+- ✅ **单元测试** - 核心模块完整覆盖
+- ✅ **集成测试** - 端到端功能验证
+- ✅ **同步测试** - 数据同步功能完整验证
 
-### 📊 测试覆盖 (100% 完成) ✅
-- **测试通过率**: ✅ 100% (466个测试用例)
-- **单元测试**: ✅ 核心模块测试通过
-- **集成测试**: ✅ 端到端功能验证
-- **性能测试**: ✅ 查询优化验证
-- **同步测试**: ✅ 数据同步功能完整验证
-
-### 📚 文档完整性 (100% 完成)
-- **架构文档**: ✅ 完整的设计指南
-- **开发文档**: ✅ 详细的开发者指南
-- **API文档**: ✅ 完整的接口参考
-- **部署文档**: ✅ 完整的生产部署指南
+### 文档完整性 (100% 完成)
+- ✅ **架构文档** - 完整的设计指南
+- ✅ **开发文档** - 详细的开发者指南
+- ✅ **API文档** - 完整的接口参考
+- ✅ **部署文档** - 生产环境部署指南
 
 ---
 
-**项目特点**: 零技术债务 | 生产就绪 | 完整测试覆盖 | 100%测试通过
+**项目特点**: 专为仿真交易设计 | 零技术债务 | 生产就绪 | 100%测试通过
+
+**相关项目**:
+- [SimTradeLab](https://github.com/kayou/SimTradeLab) - 量化策略回测框架
+- SimTradeML - 机器学习模型训练平台（开发中）
+
 **详细文档**: [Architecture_Guide.md](docs/Architecture_Guide.md) | [PRODUCTION_DEPLOYMENT_GUIDE.md](docs/PRODUCTION_DEPLOYMENT_GUIDE.md)
