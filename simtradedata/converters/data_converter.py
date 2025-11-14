@@ -83,6 +83,15 @@ class DataConverter:
         if df.empty:
             return df
 
+        # Strict validation: ensure we have expected raw fields
+        expected_fields = ["date", "open", "high", "low", "close", "volume", "amount"]
+        missing_fields = [f for f in expected_fields if f not in df.columns]
+        if missing_fields:
+            raise ValueError(
+                f"Missing expected market data fields: {missing_fields}. "
+                f"Got columns: {list(df.columns)}"
+            )
+
         # Ensure datetime index
         if not isinstance(df.index, pd.DatetimeIndex):
             if "date" in df.columns:
@@ -133,8 +142,24 @@ class DataConverter:
         if df.empty:
             return df
 
+        # Strict validation: ensure we have the expected raw fields from BaoStock
+        expected_fields = ["peTTM", "pbMRQ", "psTTM", "pcfNcfTTM", "turn"]
+        missing_fields = [f for f in expected_fields if f not in df.columns]
+        if missing_fields:
+            raise ValueError(
+                f"Missing expected valuation fields: {missing_fields}. "
+                f"Got columns: {list(df.columns)}"
+            )
+
         # Ensure datetime index
         if not isinstance(df.index, pd.DatetimeIndex):
+            if "date" in df.columns:
+                df.set_index("date", inplace=True)
+            else:
+                raise ValueError(
+                    f"Valuation data must have 'date' column or DatetimeIndex. "
+                    f"Got columns: {list(df.columns)}, index: {type(df.index).__name__}"
+                )
             df.index = pd.to_datetime(df.index)
 
         # Rename columns
@@ -281,7 +306,19 @@ class DataConverter:
         if df.empty:
             return pd.Series(dtype=float)
 
+        # Strict validation
+        expected_fields = ["date", "foreAdjustFactor", "backAdjustFactor"]
+        missing_fields = [f for f in expected_fields if f not in df.columns]
+        if missing_fields:
+            raise ValueError(
+                f"Missing expected adjust factor fields: {missing_fields}. "
+                f"Got columns: {list(df.columns)}"
+            )
+
+        # Set date as index if it's a column
         if not isinstance(df.index, pd.DatetimeIndex):
+            if "date" in df.columns:
+                df = df.set_index("date")
             df.index = pd.to_datetime(df.index)
 
         # Extract backward adjust factor
@@ -336,7 +373,8 @@ class DataConverter:
 
         # Merge adjust factors
         if not adjust_df.empty:
-            adjust_df_copy = adjust_df.reset_index()
+            # adjust_df now has 'date' as column (not index)
+            adjust_df_copy = adjust_df.copy()
             adjust_df_copy["date"] = (
                 adjust_df_copy["date"].dt.strftime("%Y%m%d").astype(int)
             )

@@ -177,7 +177,7 @@ class BaoStockFetcher:
         for col in numeric_cols:
             df[col] = pd.to_numeric(df[col], errors="coerce")
 
-        df.set_index("date", inplace=True)
+        # Note: Keep 'date' as column for converter to handle
 
         logger.info(f"Fetched {len(df)} market data rows for {symbol}")
 
@@ -226,19 +226,8 @@ class BaoStockFetcher:
         for col in numeric_cols:
             df[col] = pd.to_numeric(df[col], errors="coerce")
 
-        df.set_index("date", inplace=True)
-
-        # Rename columns to match PTrade format
-        df.rename(
-            columns={
-                "peTTM": "pe_ttm",
-                "pbMRQ": "pb",
-                "psTTM": "ps_ttm",
-                "pcfNcfTTM": "pcf",
-                "turn": "turnover_rate",
-            },
-            inplace=True,
-        )
+        # Note: Keep 'date' as a column, not as index
+        # Converter will handle index setting and column renaming
 
         logger.info(f"Fetched {len(df)} valuation data rows for {symbol}")
 
@@ -287,7 +276,7 @@ class BaoStockFetcher:
         df["foreAdjustFactor"] = pd.to_numeric(df["foreAdjustFactor"], errors="coerce")
         df["backAdjustFactor"] = pd.to_numeric(df["backAdjustFactor"], errors="coerce")
 
-        df.set_index("date", inplace=True)
+        # Note: Keep 'date' as column for converter to handle
 
         logger.info(f"Fetched {len(df)} adjust factor rows for {symbol}")
 

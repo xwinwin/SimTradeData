@@ -160,10 +160,8 @@ class MootdxFetcher:
         df = df.reset_index()
         df = df.rename(columns={"datetime": "date"})
 
-        # Keep date as datetime, don't convert to date object
-        # The converter expects datetime index
+        # Keep date as datetime column for converter to handle
         df["date"] = pd.to_datetime(df["date"])
-        df = df.set_index("date")
 
         logger.info(f"Fetched {len(df)} market data rows for {symbol} " f"from Mootdx")
 
