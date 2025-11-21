@@ -3,16 +3,12 @@ BaoStock data fetcher implementation
 """
 
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime
 
 import baostock as bs
 import pandas as pd
 
-from simtradedata.utils.code_utils import (
-    convert_from_ptrade_code,
-    format_date,
-    retry_on_failure,
-)
+from simtradedata.utils.code_utils import convert_from_ptrade_code, retry_on_failure
 
 logger = logging.getLogger(__name__)
 
@@ -68,74 +64,6 @@ class BaoStockFetcher:
             pass  # Ignore errors in destructor
 
     @retry_on_failure
-    def fetch_stock_list(self, date: str = None) -> pd.DataFrame:
-        """
-        Fetch list of all stocks (excluding indices)
-
-        Args:
-            date: Query date (YYYY-MM-DD). If None, use yesterday to avoid missing data
-
-        Returns:
-            DataFrame with columns: code, tradeStatus, code_name
-
-        Note:
-            Filters to only include actual stocks by code pattern:
-            - SH stocks: 600xxx, 601xxx, 603xxx, 605xxx, 688xxx (科创板)
-            - SZ stocks: 000xxx (主板), 001xxx, 002xxx (中小板), 003xxx, 300xxx (创业板)
-            Excludes indices like: sh.000001-000999, sz.399001-399999
-        """
-        self.login()
-
-        # Use provided date or previous day to avoid querying dates without data
-        if date is None:
-            query_date = datetime.now() - timedelta(days=1)
-            query_date_str = format_date(query_date)
-        else:
-            query_date_str = date
-
-        rs = bs.query_all_stock(day=query_date_str)
-        data_list = []
-
-        while (rs.error_code == "0") & rs.next():
-            data_list.append(rs.get_row_data())
-
-        df = pd.DataFrame(data_list, columns=rs.fields)
-
-        # Filter to only include stocks, exclude indices
-        # Extract stock number from code (e.g., 'sh.600000' -> '600000')
-        df["stock_num"] = df["code"].str.split(".").str[1]
-
-        total_count = len(df)
-
-        # Define stock code patterns (6-digit codes starting with specific prefixes)
-        # SH stocks: 600, 601, 603, 605, 688 (科创板)
-        # SZ stocks: 000 (主板), 001, 002 (中小板), 003, 300 (创业板)
-        stock_patterns = [
-            "600",
-            "601",
-            "603",
-            "605",
-            "688",  # Shanghai
-            "000",
-            "001",
-            "002",
-            "003",
-            "300",
-        ]  # Shenzhen
-
-        df = df[df["stock_num"].str[:3].isin(stock_patterns)].copy()
-        df = df.drop(columns=["stock_num"])
-
-        stocks_count = len(df)
-
-        logger.info(
-            f"Fetched {stocks_count} stocks from BaoStock "
-            f"(filtered out {total_count - stocks_count} non-stock items like indices)"
-        )
-
-        return df
-
-    @retry_on_failure
     def fetch_market_data(
         self,
         symbol: str,
@@ -143,6 +71,7 @@ class BaoStockFetcher:
         end_date: str,
         frequency: str = "d",
         adjustflag: str = "3",
+        extra_fields: list = None,
     ) -> pd.DataFrame:
         """
         Fetch market K-line data
@@ -153,39 +82,48 @@ class BaoStockFetcher:
             end_date: End date (YYYY-MM-DD)
             frequency: d=daily, w=weekly, m=monthly
             adjustflag: "1"=forward, "2"=backward, "3"=none
+            extra_fields: Additional fields to fetch (e.g., ['isST', 'tradestatus'])
 
         Returns:
-            DataFrame with columns: date, open, high, low, close, volume, amount
+            DataFrame with columns: date, open, high, low, close, volume, amount, and extra fields
         """
-        self.login()
 
         # Convert to BaoStock format
         bs_code = convert_from_ptrade_code(symbol, "baostock")
 
+        # Build fields string
+        base_fields = "date,open,high,low,close,volume,amount"
+        if extra_fields:
+            fields_str = base_fields + "," + ",".join(extra_fields)
+        else:
+            fields_str = base_fields
+
         rs = bs.query_history_k_data_plus(
             bs_code,
-            "date,open,high,low,close,volume,amount",
+            fields_str,
             start_date=start_date,
             end_date=end_date,
             frequency=frequency,
             adjustflag=adjustflag,
         )
 
-        data_list = []
-        while (rs.error_code == "0") & rs.next():
-            data_list.append(rs.get_row_data())
+        if rs.error_code != "0":
+            raise RuntimeError(
+                f"Failed to query market data for {symbol}: {rs.error_msg}"
+            )
 
-        if not data_list:
+        df = rs.get_data()
+
+        if df.empty:
             logger.warning(f"No market data for {symbol}")
             return pd.DataFrame()
-
-        df = pd.DataFrame(data_list, columns=rs.fields)
 
         # Convert data types
         df["date"] = pd.to_datetime(df["date"])
         numeric_cols = ["open", "high", "low", "close", "volume", "amount"]
         for col in numeric_cols:
-            df[col] = pd.to_numeric(df[col], errors="coerce")
+            if col in df.columns:
+                df[col] = pd.to_numeric(df[col], errors="coerce")
 
         # Note: Keep 'date' as column for converter to handle
 
@@ -208,7 +146,6 @@ class BaoStockFetcher:
         Returns:
             DataFrame with valuation indicators
         """
-        self.login()
 
         bs_code = convert_from_ptrade_code(symbol, "baostock")
 
@@ -221,15 +158,16 @@ class BaoStockFetcher:
             adjustflag="3",
         )
 
-        data_list = []
-        while (rs.error_code == "0") & rs.next():
-            data_list.append(rs.get_row_data())
+        if rs.error_code != "0":
+            raise RuntimeError(
+                f"Failed to query valuation data for {symbol}: {rs.error_msg}"
+            )
 
-        if not data_list:
+        df = rs.get_data()
+
+        if df.empty:
             logger.warning(f"No valuation data for {symbol}")
             return pd.DataFrame()
-
-        df = pd.DataFrame(data_list, columns=rs.fields)
 
         df["date"] = pd.to_datetime(df["date"])
         numeric_cols = ["peTTM", "pbMRQ", "psTTM", "pcfNcfTTM", "turn"]
@@ -258,7 +196,6 @@ class BaoStockFetcher:
         Returns:
             DataFrame with columns: date, foreAdjustFactor, backAdjustFactor
         """
-        self.login()
 
         bs_code = convert_from_ptrade_code(symbol, "baostock")
 
@@ -266,11 +203,14 @@ class BaoStockFetcher:
             code=bs_code, start_date=start_date, end_date=end_date
         )
 
-        data_list = []
-        while (rs.error_code == "0") & rs.next():
-            data_list.append(rs.get_row_data())
+        if rs.error_code != "0":
+            raise RuntimeError(
+                f"Failed to query adjust factor for {symbol}: {rs.error_msg}"
+            )
 
-        if not data_list:
+        df = rs.get_data()
+
+        if df.empty:
             # Check if it's an index (indices don't have adjust factors)
             if bs_code.startswith("sh.") and bs_code[3:].startswith("00"):
                 logger.debug(f"No adjust factor data for index {symbol} (expected)")
@@ -279,8 +219,6 @@ class BaoStockFetcher:
             else:
                 logger.warning(f"No adjust factor data for {symbol}")
             return pd.DataFrame()
-
-        df = pd.DataFrame(data_list, columns=rs.fields)
 
         # Note: BaoStock returns 'dividOperateDate', not 'date'
         df = df.rename(columns={"dividOperateDate": "date"})
@@ -307,17 +245,19 @@ class BaoStockFetcher:
         Returns:
             DataFrame with dividend information
         """
-        self.login()
 
         bs_code = convert_from_ptrade_code(symbol, "baostock")
 
         rs = bs.query_dividend_data(code=bs_code, year=str(year), yearType="report")
 
-        data_list = []
-        while (rs.error_code == "0") & rs.next():
-            data_list.append(rs.get_row_data())
+        if rs.error_code != "0":
+            raise RuntimeError(
+                f"Failed to query dividend data for {symbol}: {rs.error_msg}"
+            )
 
-        if not data_list:
+        df = rs.get_data()
+
+        if df.empty:
             # Check if it's an index (indices don't have dividends)
             if bs_code.startswith("sh.") and bs_code[3:].startswith("00"):
                 logger.debug(
@@ -330,8 +270,6 @@ class BaoStockFetcher:
             else:
                 logger.debug(f"No dividend data for {symbol} in {year}")
             return pd.DataFrame()
-
-        df = pd.DataFrame(data_list, columns=rs.fields)
 
         # Convert numeric columns
         numeric_cols = [
@@ -362,20 +300,20 @@ class BaoStockFetcher:
         Returns:
             DataFrame with profit indicators
         """
-        self.login()
 
         bs_code = convert_from_ptrade_code(symbol, "baostock")
 
         rs = bs.query_profit_data(code=bs_code, year=year, quarter=quarter)
 
-        data_list = []
-        while (rs.error_code == "0") & rs.next():
-            data_list.append(rs.get_row_data())
+        if rs.error_code != "0":
+            raise RuntimeError(
+                f"Failed to query profit data for {symbol}: {rs.error_msg}"
+            )
 
-        if not data_list:
+        df = rs.get_data()
+
+        if df.empty:
             return pd.DataFrame()
-
-        df = pd.DataFrame(data_list, columns=rs.fields)
 
         # Convert numeric columns
         for col in df.columns:
@@ -391,19 +329,19 @@ class BaoStockFetcher:
         """
         Fetch quarterly operation data (营运能力)
         """
-        self.login()
 
         bs_code = convert_from_ptrade_code(symbol, "baostock")
         rs = bs.query_operation_data(code=bs_code, year=year, quarter=quarter)
 
-        data_list = []
-        while (rs.error_code == "0") & rs.next():
-            data_list.append(rs.get_row_data())
+        if rs.error_code != "0":
+            raise RuntimeError(
+                f"Failed to query operation data for {symbol}: {rs.error_msg}"
+            )
 
-        if not data_list:
+        df = rs.get_data()
+
+        if df.empty:
             return pd.DataFrame()
-
-        df = pd.DataFrame(data_list, columns=rs.fields)
 
         for col in df.columns:
             if col not in ["code", "pubDate", "statDate"]:
@@ -416,19 +354,19 @@ class BaoStockFetcher:
         """
         Fetch quarterly growth data (成长能力)
         """
-        self.login()
 
         bs_code = convert_from_ptrade_code(symbol, "baostock")
         rs = bs.query_growth_data(code=bs_code, year=year, quarter=quarter)
 
-        data_list = []
-        while (rs.error_code == "0") & rs.next():
-            data_list.append(rs.get_row_data())
+        if rs.error_code != "0":
+            raise RuntimeError(
+                f"Failed to query growth data for {symbol}: {rs.error_msg}"
+            )
 
-        if not data_list:
+        df = rs.get_data()
+
+        if df.empty:
             return pd.DataFrame()
-
-        df = pd.DataFrame(data_list, columns=rs.fields)
 
         for col in df.columns:
             if col not in ["code", "pubDate", "statDate"]:
@@ -441,19 +379,19 @@ class BaoStockFetcher:
         """
         Fetch quarterly balance data (偿债能力)
         """
-        self.login()
 
         bs_code = convert_from_ptrade_code(symbol, "baostock")
         rs = bs.query_balance_data(code=bs_code, year=year, quarter=quarter)
 
-        data_list = []
-        while (rs.error_code == "0") & rs.next():
-            data_list.append(rs.get_row_data())
+        if rs.error_code != "0":
+            raise RuntimeError(
+                f"Failed to query balance data for {symbol}: {rs.error_msg}"
+            )
 
-        if not data_list:
+        df = rs.get_data()
+
+        if df.empty:
             return pd.DataFrame()
-
-        df = pd.DataFrame(data_list, columns=rs.fields)
 
         for col in df.columns:
             if col not in ["code", "pubDate", "statDate"]:
@@ -472,18 +410,162 @@ class BaoStockFetcher:
         Returns:
             DataFrame with basic stock information
         """
-        self.login()
 
         bs_code = convert_from_ptrade_code(symbol, "baostock")
         rs = bs.query_stock_basic(code=bs_code)
 
-        data_list = []
-        while (rs.error_code == "0") & rs.next():
-            data_list.append(rs.get_row_data())
+        if rs.error_code != "0":
+            raise RuntimeError(
+                f"Failed to query stock basic info for {symbol}: {rs.error_msg}"
+            )
 
-        if not data_list:
+        df = rs.get_data()
+
+        if df.empty:
             return pd.DataFrame()
 
-        df = pd.DataFrame(data_list, columns=rs.fields)
+        return df
+
+    @retry_on_failure
+    def fetch_stock_list_by_date(self, date: str = "") -> pd.DataFrame:
+        """
+        Fetch stock list on a specific date
+
+        Args:
+            date: Date string in format 'YYYY-MM-DD' or 'YYYYMMDD'
+
+        Returns:
+            DataFrame with columns: code, code_name, type, status
+        """
+
+        rs = bs.query_all_stock(day=date)
+
+        if rs.error_code != "0":
+            raise RuntimeError(f"Failed to query stock list for {date}: {rs.error_msg}")
+
+        df = rs.get_data()
+
+        if df.empty:
+            logger.warning(f"No stocks found for {date}")
+            return pd.DataFrame()
+
+        return df
+
+    @retry_on_failure
+    def fetch_stock_industry(self, symbol: str, date: str = None) -> pd.DataFrame:
+        """
+        Fetch stock industry classification
+
+        Args:
+            symbol: Stock code in PTrade format
+            date: Date string (YYYY-MM-DD), if None use today
+
+        Returns:
+            DataFrame with industry classification
+        """
+
+        bs_code = convert_from_ptrade_code(symbol, "baostock")
+
+        if date is None:
+            date = datetime.now().strftime("%Y-%m-%d")
+
+        # Normalize date format
+        date_str = date.replace("-", "")
+
+        rs = bs.query_stock_industry(code=bs_code, date=date_str)
+
+        if rs.error_code != "0":
+            raise RuntimeError(f"Failed to query industry for {symbol}: {rs.error_msg}")
+
+        df = rs.get_data()
+
+        if df.empty:
+            logger.warning(f"No industry data for {symbol}")
+            return pd.DataFrame()
+
+        return df
+
+    @retry_on_failure
+    def fetch_trade_calendar(self, start_date: str, end_date: str) -> pd.DataFrame:
+        """
+        Fetch trading calendar
+
+        Args:
+            start_date: Start date (YYYY-MM-DD)
+            end_date: End date (YYYY-MM-DD)
+
+        Returns:
+            DataFrame with trading days
+        """
+
+        rs = bs.query_trade_dates(start_date=start_date, end_date=end_date)
+
+        if rs.error_code != "0":
+            raise RuntimeError(f"Failed to query trade calendar: {rs.error_msg}")
+
+        df = rs.get_data()
+
+        if df.empty:
+            return pd.DataFrame()
+
+        return df
+
+    @retry_on_failure
+    def fetch_index_stocks(self, index_code: str, date: str = None) -> pd.DataFrame:
+        """
+        Fetch index constituent stocks
+
+        Args:
+            index_code: Index code in PTrade format (e.g., '000016.SS', '000300.SS', '000905.SS')
+            date: Date string (YYYY-MM-DD), if None use latest
+
+        Returns:
+            DataFrame with stock codes
+
+        Note:
+            BaoStock only supports specific indices:
+            - 000016.SS (上证50): query_sz50_stocks
+            - 000300.SS (沪深300): query_hs300_stocks
+            - 000905.SS (中证500): query_zz500_stocks
+        """
+
+        query_date = date
+        if query_date is None:
+            query_date = datetime.now().strftime("%Y-%m-%d")
+
+        # Map PTrade index codes to BaoStock query methods
+        index_map = {
+            "000016.SS": "sz50",  # 上证50
+            "000300.SS": "hs300",  # 沪深300
+            "000905.SS": "zz500",  # 中证500
+        }
+
+        if index_code not in index_map:
+            logger.warning(f"Index {index_code} not supported by BaoStock")
+            return pd.DataFrame()
+
+        index_type = index_map[index_code]
+
+        # Call corresponding BaoStock API
+        if index_type == "sz50":
+            rs = bs.query_sz50_stocks(date=query_date)
+        elif index_type == "hs300":
+            rs = bs.query_hs300_stocks(date=query_date)
+        elif index_type == "zz500":
+            rs = bs.query_zz500_stocks(date=query_date)
+        else:
+            logger.warning(f"Unknown index type: {index_type}")
+            return pd.DataFrame()
+
+        if rs.error_code != "0":
+            raise RuntimeError(
+                f"Failed to query index stocks for {index_code}: {rs.error_msg}"
+            )
+
+        df = rs.get_data()
+
+        if df.empty:
+            logger.warning(f"No constituent stocks found for {index_code}")
+            return pd.DataFrame()
 
         return df

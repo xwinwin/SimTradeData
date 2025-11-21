@@ -14,11 +14,16 @@ def convert_to_ptrade_code(code: str, source: str = "baostock") -> str:
         source: Data source name ('baostock', 'qstock', 'yahoo')
 
     Returns:
-        Stock code in PTrade format (e.g., '600000.SH', '000001.SZ')
+        Stock code in PTrade format (e.g., '600000.SS', '000001.SZ')
+
+    Note:
+        PTrade/SimTradeLab uses:
+        - Shanghai stocks: .SS (not .SH)
+        - Shenzhen stocks: .SZ
 
     Examples:
         >>> convert_to_ptrade_code('sh.600000', 'baostock')
-        '600000.SH'
+        '600000.SS'
         >>> convert_to_ptrade_code('000001', 'qstock')
         '000001.SZ'
     """
@@ -26,7 +31,8 @@ def convert_to_ptrade_code(code: str, source: str = "baostock") -> str:
         # BaoStock format: sh.600000, sz.000001
         if "." in code:
             market, symbol = code.split(".")
-            market_map = {"sh": "SH", "sz": "SZ"}
+            # Map to SimTradeLab format: SS for Shanghai, SZ for Shenzhen
+            market_map = {"sh": "SS", "sz": "SZ"}
             return f"{symbol}.{market_map[market.lower()]}"
         return code
 
@@ -34,15 +40,14 @@ def convert_to_ptrade_code(code: str, source: str = "baostock") -> str:
         # QStock format: 600000, 000001
         # Determine market by code prefix
         if code.startswith("6") or code.startswith("5"):
-            return f"{code}.SH"
+            return f"{code}.SS"  # Shanghai uses .SS
         elif code.startswith("0") or code.startswith("3"):
             return f"{code}.SZ"
         return code
 
     elif source == "yahoo":
         # Yahoo format: 600000.SS (Shanghai), 000001.SZ (Shenzhen)
-        if code.endswith(".SS"):
-            return code.replace(".SS", ".SH")
+        # Yahoo already uses .SS, so no conversion needed
         return code
 
     return code
@@ -53,14 +58,14 @@ def convert_from_ptrade_code(code: str, target_source: str) -> str:
     Convert PTrade format code to target source format
 
     Args:
-        code: Stock code in PTrade format (e.g., '600000.SH')
+        code: Stock code in PTrade format (e.g., '600000.SS')
         target_source: Target source name ('baostock', 'qstock', 'yahoo', 'mootdx')
 
     Returns:
         Stock code in target source format
 
     Examples:
-        >>> convert_from_ptrade_code('600000.SH', 'baostock')
+        >>> convert_from_ptrade_code('600000.SS', 'baostock')
         'sh.600000'
         >>> convert_from_ptrade_code('000001.SZ', 'qstock')
         '000001'
@@ -73,16 +78,16 @@ def convert_from_ptrade_code(code: str, target_source: str) -> str:
     symbol, market = code.split(".")
 
     if target_source == "baostock":
-        market_map = {"SH": "sh", "SZ": "sz"}
-        return f"{market_map[market]}.{symbol}"
+        # Map SS back to sh for BaoStock
+        market_map = {"SS": "sh", "SZ": "sz", "SH": "sh"}  # Support both SS and SH
+        return f"{market_map.get(market, market.lower())}.{symbol}"
 
     elif target_source in ("qstock", "mootdx"):
         # Both qstock and mootdx use simple code format (e.g., '000001')
         return symbol
 
     elif target_source == "yahoo":
-        if market == "SH":
-            return f"{symbol}.SS"
+        # Yahoo uses .SS for Shanghai (same as PTrade)
         return code
 
     return code

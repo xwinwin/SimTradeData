@@ -67,10 +67,7 @@ class HDF5Writer:
             store.put(
                 key,
                 data,
-                format="table",
-                data_columns=True,
-                complevel=9,
-                complib="blosc",
+                format="fixed",
             )
 
         logger.info(
@@ -107,6 +104,54 @@ class HDF5Writer:
             f"Wrote benchmark data to {self.ptrade_data_path}: {len(data)} rows"
         )
 
+    def write_metadata(
+        self,
+        start_date: str,
+        end_date: str,
+        stock_count: int,
+        mode: str = "a",
+    ) -> None:
+        """
+        Write metadata Series to ptrade_data.h5/metadata
+
+        The metadata contains essential information about the dataset,
+        including download date, date range, stock count, etc.
+
+        Args:
+            start_date: Data start date (YYYY-MM-DD)
+            end_date: Data end date (YYYY-MM-DD)
+            stock_count: Number of stocks in the dataset
+            mode: 'a' for append, 'w' for overwrite
+        """
+        import json
+        from datetime import datetime
+
+        # Create metadata Series matching simtradelab format
+        metadata = pd.Series(
+            {
+                "download_date": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                "start_date": start_date,
+                "end_date": end_date,
+                "stock_count": stock_count,
+                "sample_count": 0,  # Will be updated if needed
+                "format_version": 3,
+                "index_constituents": json.dumps({}),  # Empty dict as placeholder
+                "stock_status_history": json.dumps({}),  # Empty dict as placeholder
+            }
+        )
+
+        with pd.HDFStore(self.ptrade_data_path, mode=mode) as store:
+            store.put(
+                "metadata",
+                metadata,
+                format="fixed",
+            )
+
+        logger.info(
+            f"Wrote metadata to {self.ptrade_data_path}: "
+            f"start={start_date}, end={end_date}, stocks={stock_count}"
+        )
+
     def write_exrights(self, symbol: str, data: pd.DataFrame, mode: str = "a") -> None:
         """
         Write exrights data to ptrade_data.h5/exrights/{symbol}
@@ -126,10 +171,7 @@ class HDF5Writer:
             store.put(
                 key,
                 data,
-                format="table",
-                data_columns=True,
-                complevel=9,
-                complib="blosc",
+                format="fixed",
             )
 
         logger.info(
@@ -154,11 +196,7 @@ class HDF5Writer:
             store.put(
                 "stock_metadata",
                 metadata_df,
-                format="table",
-                data_columns=True,
-                complevel=9,
-                complib="blosc",
-                min_itemsize={"stock_name": 100},
+                format="fixed",
             )
 
         logger.info(
@@ -190,10 +228,7 @@ class HDF5Writer:
             store.put(
                 key,
                 data,
-                format="table",
-                data_columns=True,
-                complevel=9,
-                complib="blosc",
+                format="fixed",
             )
 
         logger.info(
@@ -223,10 +258,7 @@ class HDF5Writer:
             store.put(
                 key,
                 data,
-                format="table",
-                data_columns=True,
-                complevel=9,
-                complib="blosc",
+                format="fixed",
             )
 
         logger.info(
@@ -259,9 +291,7 @@ class HDF5Writer:
             store.put(
                 symbol,
                 data,
-                format="table",
-                complevel=9,
-                complib="blosc",
+                format="fixed",
             )
 
         logger.info(
@@ -312,10 +342,7 @@ class HDF5Writer:
                     store.put(
                         key,
                         market_data,
-                        format="table",
-                        data_columns=True,
-                        complevel=9,
-                        complib="blosc",
+                        format="fixed",
                     )
 
                 # Write exrights data
@@ -327,24 +354,26 @@ class HDF5Writer:
                     store.put(
                         key,
                         exrights_data,
-                        format="table",
-                        data_columns=True,
-                        complevel=9,
-                        complib="blosc",
+                        format="fixed",
                     )
 
                 # Write metadata
                 if metadata:
                     metadata_df = pd.DataFrame([metadata], index=[symbol])
                     metadata_df.index.name = "stock_code"
-                    store.put(
-                        "stock_metadata",
-                        metadata_df,
-                        format="table",
-                        data_columns=True,
-                        append=True,
-                        min_itemsize={"stock_name": 100},
-                    )
+                    # Note: Fixed format doesn't support append, use table format for metadata
+                    try:
+                        if "/stock_metadata" in store.keys():
+                            existing = store["stock_metadata"]
+                            updated = pd.concat(
+                                [existing[existing.index != symbol], metadata_df]
+                            )
+                            del store["stock_metadata"]
+                            store.put("stock_metadata", updated, format="table")
+                        else:
+                            store.put("stock_metadata", metadata_df, format="table")
+                    except Exception as e:
+                        logger.warning(f"Failed to update metadata for {symbol}: {e}")
 
         # Write to ptrade_fundamentals.h5 (valuation, fundamentals) in one session
         has_fundamentals = (
@@ -362,10 +391,7 @@ class HDF5Writer:
                     store.put(
                         key,
                         valuation_data,
-                        format="table",
-                        data_columns=True,
-                        complevel=9,
-                        complib="blosc",
+                        format="fixed",
                     )
 
                 # Write fundamentals data
@@ -379,10 +405,7 @@ class HDF5Writer:
                     store.put(
                         key,
                         fundamentals_data,
-                        format="table",
-                        data_columns=True,
-                        complevel=9,
-                        complib="blosc",
+                        format="fixed",
                     )
 
         # Write to ptrade_adj_pre.h5 (adjust factor)
@@ -396,9 +419,7 @@ class HDF5Writer:
                 store.put(
                     symbol,
                     adjust_factor,
-                    format="table",
-                    complevel=9,
-                    complib="blosc:zstd",
+                    format="fixed",
                 )
 
         logger.info(f"Wrote all data for {symbol}")

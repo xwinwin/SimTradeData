@@ -211,8 +211,10 @@ __marimo__/
 data/
 *.json
 CLAUDE*.md
+GEMINI.md
 AGENTS.md
 .claude/*
 .spec-workflow/*
 *.h5
 *.png
+research/

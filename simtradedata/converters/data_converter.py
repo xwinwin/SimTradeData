@@ -98,6 +98,9 @@ class DataConverter:
                 df.set_index("date", inplace=True)
             df.index = pd.to_datetime(df.index)
 
+        # Normalize datetime to remove time component (SimTradeLab uses date only)
+        df.index = df.index.normalize()
+
         # Select and rename required columns
         result = pd.DataFrame(index=df.index)
 
@@ -107,8 +110,9 @@ class DataConverter:
             elif src_field == "amount" and "amount" in df.columns:
                 result["money"] = df["amount"]
 
-        # Ensure column order
-        column_order = ["open", "high", "low", "close", "volume", "money"]
+        # Ensure column order matches SimTradeLab format
+        # SimTradeLab uses: close, open, high, low, volume, money
+        column_order = ["close", "open", "high", "low", "volume", "money"]
         result = result[[col for col in column_order if col in result.columns]]
 
         # Convert to appropriate data types
