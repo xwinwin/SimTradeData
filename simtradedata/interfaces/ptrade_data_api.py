@@ -328,6 +328,32 @@ def get_stock_status(
     result = {}
     fetcher = _get_fetcher()
 
+    # Optimized path for HALT
+    if query_type == "HALT":
+        try:
+            all_stocks_df = fetcher.fetch_stock_list_by_date(query_date)
+            if all_stocks_df is not None and not all_stocks_df.empty:
+                # Create a lookup map for tradeStatus
+                status_map = {
+                    convert_to_ptrade_code(row["code"], "baostock"): row[
+                        "tradeStatus"
+                    ]
+                    == "0"
+                    for _, row in all_stocks_df.iterrows()
+                }
+                # Populate result based on the map
+                for stock in securities:
+                    result[stock] = status_map.get(stock, False)
+            else:
+                # Fallback or set all to False if API fails
+                for stock in securities:
+                    result[stock] = False
+            return result
+        except Exception as e:
+            logger.error(f"Optimized get_stock_status HALT failed: {e}")
+            # Fallback to old method on error
+            pass
+
     for stock in securities:
         try:
             if query_type == "ST":
@@ -371,7 +397,7 @@ def get_stock_status(
                     is_delisted = status == "0"
                     if not is_delisted and out_date:
                         out_date_int = int(out_date.replace("-", ""))
-                        query_date_int = int(query_date)
+                        query_date_int = int(query_date.replace("-", ""))
                         is_delisted = query_date_int > out_date_int
 
                     result[stock] = is_delisted

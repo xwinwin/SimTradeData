@@ -15,6 +15,7 @@ from tables import NaturalNameWarning
 from tqdm import tqdm
 
 # Import PTrade-compatible API
+from simtradedata.fetchers.baostock_fetcher import BaoStockFetcher
 from simtradedata.interfaces.ptrade_data_api import (
     get_Ashares,
     get_index_stocks,
@@ -163,22 +164,57 @@ def download_index_constituents(sample_dates):
     return constituents
 
 
-def download_stock_status_history(stocks, sample_dates):
+def download_stock_status_history(
+    stocks, sample_dates, start_date, end_date, fetcher
+):
     """Download stock status history (ST/HALT/DELISTING)"""
     status_types = ["ST", "HALT", "DELISTING"]
     status_history = {}
 
     print("\nDownloading stock status history...")
 
-    for date_obj in tqdm(sample_dates, desc="Downloading stock status history"):
+    # Optimized: Fetch all delisting info at once
+    all_stock_basics = _get_all_stock_basics(stocks, fetcher)
+
+    # Optimized: Fetch all ST history at once
+    st_history = _get_st_stock_history(stocks, start_date, end_date, fetcher)
+
+    for date_obj in tqdm(sample_dates, desc="Processing stock status history"):
         date_str = date_obj.strftime("%Y%m%d")
+        date_iso = date_obj.strftime("%Y-%m-%d")
         status_history[date_str] = {}
 
         for status_type in status_types:
             try:
-                result = get_stock_status(
-                    stocks, query_type=status_type, query_date=date_str
-                )
+                result = {}
+                if status_type == "DELISTING":
+                    # Use pre-fetched data
+                    date_int = int(date_iso.replace("-", ""))
+                    for stock, basic_info in all_stock_basics.items():
+                        is_delisted = basic_info["status"] == "0"
+                        out_date = basic_info["outDate"]
+                        if not is_delisted and out_date and out_date.strip():
+                            out_date_int = int(out_date.replace("-", ""))
+                            if date_int >= out_date_int:
+                                is_delisted = True
+                        if is_delisted:
+                            result[stock] = True
+
+                elif status_type == "ST":
+                    # Use pre-fetched history
+                    for stock, st_df in st_history.items():
+                        if not st_df.empty:
+                            # Check if the date is in the history
+                            if pd.Timestamp(date_iso) in st_df.index:
+                                if st_df.loc[pd.Timestamp(date_iso)]["isST"] == "1":
+                                    result[stock] = True
+
+                elif status_type == "HALT":
+                    # Use the optimized API call
+                    result = get_stock_status(
+                        stocks, query_type="HALT", query_date=date_str
+                    )
+
                 if result:
                     # Only save True values to save space
                     status_history[date_str][status_type] = {
@@ -193,15 +229,59 @@ def download_stock_status_history(stocks, sample_dates):
                         )
                 else:
                     status_history[date_str][status_type] = {}
+
             except Exception as e:
                 logger.error(
-                    "Stock status download failed: {} {} - {}".format(
+                    "Stock status processing failed: {} {} - {}".format(
                         date_str, status_type, e
                     )
                 )
                 status_history[date_str][status_type] = {}
 
     return status_history
+
+
+def _get_all_stock_basics(stocks, fetcher):
+    """Helper to fetch basic info for all stocks at once."""
+    print("Fetching all stock basic info for delisting checks...")
+    all_stock_basics = {}
+    for stock in tqdm(stocks, desc="Fetching stock basics"):
+        try:
+            basic_df = fetcher.fetch_stock_basic(stock)
+            if basic_df is not None and not basic_df.empty:
+                all_stock_basics[stock] = {
+                    "status": str(basic_df["status"].values[0]),
+                    "outDate": basic_df["outDate"].values[0],
+                }
+        except Exception as e:
+            logger.error(f"Failed to get basic info for {stock}: {e}")
+    return all_stock_basics
+
+
+def _get_st_stock_history(stocks, start_date, end_date, fetcher):
+    """Helper to fetch ST history for all stocks in a date range."""
+    print("Fetching ST history for all stocks...")
+    st_history = {}
+    for stock in tqdm(stocks, desc="Fetching ST history"):
+        try:
+            df = fetcher.fetch_market_data(
+                symbol=stock,
+                start_date=start_date,
+                end_date=end_date,
+                extra_fields=["isST"],
+            )
+            if df is not None and not df.empty:
+                df = df.set_index("date")
+                # Filter for only ST days to save memory
+                st_days = df[df["isST"] == "1"]
+                if not st_days.empty:
+                    st_history[stock] = st_days
+
+        except Exception as e:
+            logger.error(f"Failed to get ST history for {stock}: {e}")
+            st_history[stock] = pd.DataFrame()
+
+    return st_history
 
 
 def download_trade_days(start_date, end_date):
@@ -321,65 +401,71 @@ def download_all_data(incremental_days=None):
 
     logger.info(f"Stock pool size: {len(stock_pool)}")
 
-    # Download index constituents
-    index_constituents = download_index_constituents(sample_dates)
+    # Initialize BaoStock Fetcher
+    with BaoStockFetcher() as fetcher:
+        # Download index constituents
+        index_constituents = download_index_constituents(sample_dates)
 
-    # Download stock status history (batch processing to avoid timeout)
-    stock_status_history = download_stock_status_history(stock_pool, sample_dates)
+        # Download stock status history (batch processing to avoid timeout)
+        stock_status_history = download_stock_status_history(
+            stock_pool, sample_dates, start_date_str, end_date_str, fetcher
+        )
 
-    # Download trading calendar
-    print("\nDownloading trading calendar...")
-    trade_days_df = download_trade_days(start_date, end_date)
+        # Download trading calendar
+        print("\nDownloading trading calendar...")
+        trade_days_df = download_trade_days(start_date, end_date)
 
-    # Download data (temporary storage)
-    price_data = {}
-    metadata_list = []
-    exrights_data = {}
+        # Download data (temporary storage)
+        price_data = {}
+        metadata_list = []
+        exrights_data = {}
 
-    success = 0
-    fail = 0
+        success = 0
+        fail = 0
 
-    for stock in tqdm(stock_pool, desc="Downloading stock data"):
-        logger.info(f"Processing stock: {stock}")
-        try:
-            # Download price
-            price_df = download_stock_price(stock, start_date_str, end_date_str)
-            if price_df is not None:
-                price_data[stock] = price_df
-                logger.info(f"Downloaded price for {stock}: {len(price_df)} rows")
-            else:
-                logger.warning(f"No price data for {stock}")
+        for stock in tqdm(stock_pool, desc="Downloading stock data"):
+            logger.info(f"Processing stock: {stock}")
+            try:
+                # Download price
+                price_df = download_stock_price(stock, start_date_str, end_date_str)
+                if price_df is not None:
+                    price_data[stock] = price_df
+                    logger.info(f"Downloaded price for {stock}: {len(price_df)} rows")
+                else:
+                    logger.warning(f"No price data for {stock}")
 
-            # Download metadata
-            meta = download_stock_metadata(stock)
-            metadata_list.append(
-                {
-                    "stock_code": stock,
-                    "stock_name": meta.get("stock_name"),
-                    "listed_date": meta.get("listed_date"),
-                    "de_listed_date": meta.get("de_listed_date"),
-                    "blocks": (
-                        json.dumps(meta.get("blocks", {}), ensure_ascii=False)
-                        if meta.get("blocks")
-                        else None
-                    ),
-                    "has_info": meta.get("has_info", False),
-                }
-            )
+                # Download metadata
+                meta = download_stock_metadata(stock)
+                metadata_list.append(
+                    {
+                        "stock_code": stock,
+                        "stock_name": meta.get("stock_name"),
+                        "listed_date": meta.get("listed_date"),
+                        "de_listed_date": meta.get("de_listed_date"),
+                        "blocks": (
+                            json.dumps(meta.get("blocks", {}), ensure_ascii=False)
+                            if meta.get("blocks")
+                            else None
+                        ),
+                        "has_info": meta.get("has_info", False),
+                    }
+                )
 
-            # Download exrights
-            ex_df = download_stock_exrights(stock)
-            if ex_df is not None:
-                exrights_data[stock] = ex_df
-                logger.info(f"Downloaded exrights for {stock}: {len(ex_df)} rows")
-            else:
-                logger.warning(f"No exrights data for {stock}")
+                # Download exrights
+                ex_df = download_stock_exrights(stock)
+                if ex_df is not None:
+                    exrights_data[stock] = ex_df
+                    logger.info(
+                        f"Downloaded exrights for {stock}: {len(ex_df)} rows"
+                    )
+                else:
+                    logger.warning(f"No exrights data for {stock}")
 
-            success += 1
+                success += 1
 
-        except Exception as e:
-            logger.error("Download failed: {} - {}".format(stock, e))
-            fail += 1
+            except Exception as e:
+                logger.error("Download failed: {} - {}".format(stock, e))
+                fail += 1
 
     print("\n\nDownload complete, starting save and optimization...")
 
