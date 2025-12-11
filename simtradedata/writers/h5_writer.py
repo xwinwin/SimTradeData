@@ -49,7 +49,7 @@ class HDF5Writer:
             mode: 'a' for append, 'w' for overwrite
         """
         if data.empty:
-            logger.warning(f"No data to write for {symbol}")
+            logger.info(f"No data to write for {symbol}")
             return
 
         # Validate data quality before writing
@@ -87,8 +87,14 @@ class HDF5Writer:
             mode: 'a' for append, 'w' for overwrite
         """
         if data.empty:
-            logger.warning("No benchmark data to write")
+            logger.info("No benchmark data to write")
             return
+
+        # Validate data quality before writing
+        try:
+            validate_before_write(data, "market", "benchmark", strict=False)
+        except Exception as e:
+            logger.error(f"Validation failed for benchmark data: {e}")
 
         if not isinstance(data.index, pd.DatetimeIndex):
             data.index = pd.to_datetime(data.index)
@@ -165,7 +171,7 @@ class HDF5Writer:
             mode: 'a' for append, 'w' for overwrite
         """
         if data.empty:
-            logger.warning(f"No exrights data to write for {symbol}")
+            logger.info(f"No data to write for {symbol}")
             return
 
         key = f"exrights/{symbol}"
@@ -194,7 +200,7 @@ class HDF5Writer:
             mode: 'a' for append, 'w' for overwrite
         """
         if metadata_df.empty:
-            logger.warning("No stock metadata to write")
+            logger.info("No data to write")
             return
 
         # Convert all columns to string to avoid PyTables mixed-type warning
@@ -228,7 +234,7 @@ class HDF5Writer:
             mode: 'a' for append, 'w' for overwrite
         """
         if data.empty:
-            logger.warning(f"No fundamentals data to write for {symbol}")
+            logger.info(f"No data to write for {symbol}")
             return
 
         # Ensure end_date is the index
@@ -263,7 +269,7 @@ class HDF5Writer:
             mode: 'a' for append, 'w' for overwrite
         """
         if data.empty:
-            logger.warning(f"No valuation data to write for {symbol}")
+            logger.info(f"No data to write for {symbol}")
             return
 
         if not isinstance(data.index, pd.DatetimeIndex):
@@ -297,7 +303,7 @@ class HDF5Writer:
             mode: 'a' for append, 'w' for overwrite
         """
         if data.empty:
-            logger.warning(f"No adjust factor data to write for {symbol}")
+            logger.info(f"No data to write for {symbol}")
             return
 
         if not isinstance(data.index, pd.DatetimeIndex):
@@ -353,7 +359,7 @@ class HDF5Writer:
             mode: 'a' for append, 'w' for overwrite
         """
         if metadata.empty:
-            logger.warning("No global metadata to write")
+            logger.info("No data to write")
             return
 
         with pd.HDFStore(self.ptrade_data_path, mode=mode) as store:
@@ -363,6 +369,50 @@ class HDF5Writer:
                 format="fixed",
             )
         logger.info(f"Wrote global metadata to {self.ptrade_data_path}")
+
+    def merge_and_write_global_data(
+        self,
+        key: str,
+        new_data: pd.DataFrame,
+        write_method: callable
+    ) -> None:
+        """
+        Merge new global data with existing data and write to HDF5
+
+        This method handles the common pattern of reading existing data,
+        merging with new data, and writing back to avoid data loss.
+
+        Args:
+            key: HDF5 key (with leading slash, e.g., '/benchmark')
+            new_data: New DataFrame to merge
+            write_method: Method to call for writing (e.g., self.write_benchmark)
+        """
+        if new_data.empty:
+            logger.info(f"No new data to merge for {key}")
+            return
+
+        merged_data = new_data.copy()
+
+        # Try to read existing data
+        try:
+            with pd.HDFStore(self.ptrade_data_path, mode='r') as store:
+                if key in store.keys():
+                    existing_data = store[key]
+                    # Combine and remove duplicates (keep='last' means new data overwrites old)
+                    merged_data = pd.concat([existing_data, new_data])
+                    merged_data = merged_data[~merged_data.index.duplicated(keep='last')]
+                    merged_data = merged_data.sort_index()
+                    logger.info(
+                        f"Merged {key}: {len(existing_data)} existing + "
+                        f"{len(new_data)} new = {len(merged_data)} total"
+                    )
+        except FileNotFoundError:
+            logger.info(f"No existing file, will create new data for {key}")
+        except KeyError:
+            logger.info(f"No existing data for {key}, will create new")
+
+        # Write merged data (always use mode='w' to replace the key)
+        write_method(merged_data, mode='w')
 
     def write_all_for_stock(
         self,

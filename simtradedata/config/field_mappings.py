@@ -78,3 +78,15 @@ DATA_ROUTING = {
         'rename': {}
     }
 }
+
+# Benchmark configuration
+BENCHMARK_CONFIG = {
+    'default_index': '000300.SS',  # CSI300 (沪深300)
+    'alternatives': {
+        '000016.SS': 'SSE50',      # 上证50
+        '000905.SS': 'CSI500',     # 中证500
+        '000001.SS': 'SSE',        # 上证指数
+        '399001.SZ': 'SZSE',       # 深证成指
+        '399006.SZ': 'CYBZ',       # 创业板指
+    }
+}

@@ -27,6 +27,7 @@ from simtradedata.fetchers.baostock_fetcher import BaoStockFetcher
 from simtradedata.fetchers.unified_fetcher import UnifiedDataFetcher
 from simtradedata.processors.data_splitter import DataSplitter
 from simtradedata.writers.h5_writer import HDF5Writer
+from simtradedata.config.field_mappings import BENCHMARK_CONFIG
 
 warnings.filterwarnings("ignore", category=NaturalNameWarning)
 
@@ -454,26 +455,19 @@ def download_all_data(incremental_days=None, skip_fundamentals=False, skip_metad
                 new_trade_days['trade_date'] = pd.to_datetime(new_trade_days['calendar_date'])
                 new_trade_days = new_trade_days[['trade_date']].set_index('trade_date')
 
-                # Merge with existing trade days to avoid overwriting
-                try:
-                    with pd.HDFStore(downloader.writer.ptrade_data_path, mode='r') as store:
-                        if 'trade_days' in store:
-                            existing_trade_days = store['trade_days']
-                            # Combine and remove duplicates
-                            new_trade_days = pd.concat([existing_trade_days, new_trade_days])
-                            new_trade_days = new_trade_days[~new_trade_days.index.duplicated(keep='last')]
-                            new_trade_days = new_trade_days.sort_index()
-                except (FileNotFoundError, KeyError):
-                    pass  # No existing data, use new data only
-
-                downloader.writer.write_trade_days(new_trade_days, mode='w')
-                print(f"  Trading calendar: {len(new_trade_days)} days")
+                # Use refactored merge method
+                downloader.writer.merge_and_write_global_data(
+                    '/trade_days',
+                    new_trade_days,
+                    downloader.writer.write_trade_days
+                )
+                print(f"  Trading calendar: {len(new_trade_days)} days fetched")
         except Exception as e:
             logger.error(f"Failed to download trading calendar: {e}")
 
         # 5.2 Benchmark index data
-        # Use CSI300 (000300.SS) as default benchmark
-        BENCHMARK_INDEX = '000300.SS'
+        # Use configured benchmark index (default: CSI300)
+        BENCHMARK_INDEX = BENCHMARK_CONFIG['default_index']
         try:
             print(f"  Downloading benchmark index ({BENCHMARK_INDEX})...")
             benchmark_df = downloader.unified_fetcher.fetch_index_data(
@@ -481,20 +475,13 @@ def download_all_data(incremental_days=None, skip_fundamentals=False, skip_metad
             )
 
             if not benchmark_df.empty:
-                # Merge with existing benchmark data to avoid overwriting
-                try:
-                    with pd.HDFStore(downloader.writer.ptrade_data_path, mode='r') as store:
-                        if 'benchmark' in store:
-                            existing_benchmark = store['benchmark']
-                            # Combine and remove duplicates
-                            benchmark_df = pd.concat([existing_benchmark, benchmark_df])
-                            benchmark_df = benchmark_df[~benchmark_df.index.duplicated(keep='last')]
-                            benchmark_df = benchmark_df.sort_index()
-                except (FileNotFoundError, KeyError):
-                    pass  # No existing data, use new data only
-
-                downloader.writer.write_benchmark(benchmark_df, mode='w')
-                print(f"  Benchmark index: {len(benchmark_df)} days")
+                # Use refactored merge method
+                downloader.writer.merge_and_write_global_data(
+                    '/benchmark',
+                    benchmark_df,
+                    downloader.writer.write_benchmark
+                )
+                print(f"  Benchmark index: {len(benchmark_df)} days fetched")
         except Exception as e:
             logger.error(f"Failed to download benchmark data: {e}")
 
