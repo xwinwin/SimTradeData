@@ -28,6 +28,7 @@ from simtradedata.fetchers.unified_fetcher import UnifiedDataFetcher
 from simtradedata.processors.data_splitter import DataSplitter
 from simtradedata.writers.h5_writer import HDF5Writer
 from simtradedata.config.field_mappings import BENCHMARK_CONFIG
+from simtradedata.utils.download_progress import DownloadProgress
 
 warnings.filterwarnings("ignore", category=NaturalNameWarning)
 
@@ -62,7 +63,7 @@ class EfficientBaoStockDownloader:
     in a single call and routing them to appropriate HDF5 structures.
     """
     
-    def __init__(self, output_dir: str = ".", skip_fundamentals: bool = False, skip_metadata: bool = False):
+    def __init__(self, output_dir: str = ".", skip_fundamentals: bool = False, skip_metadata: bool = False, progress_tracker: DownloadProgress = None):
         self.output_dir = Path(output_dir)
         self.output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -75,6 +76,9 @@ class EfficientBaoStockDownloader:
         # Configuration
         self.skip_fundamentals = skip_fundamentals
         self.skip_metadata = skip_metadata
+
+        # Progress tracker for resume capability
+        self.progress = progress_tracker
 
         # Cache for status data (used to build stock_status_history)
         self.status_cache = {}
@@ -251,10 +255,14 @@ class EfficientBaoStockDownloader:
         except TimeoutError as e:
             logger.error(f"Timeout downloading {symbol}: {e}")
             self.timeout_stocks.append(symbol)
+            if self.progress:
+                self.progress.mark_failed(symbol, "timeout")
             return None
         except Exception as e:
             logger.error(f"Failed to download {symbol}: {e}")
             self.failed_stocks.append(symbol)
+            if self.progress:
+                self.progress.mark_failed(symbol, str(e))
             return None
     
     def download_batch(
@@ -282,13 +290,16 @@ class EfficientBaoStockDownloader:
                 metadata = self.download_stock_data(stock, start_date, end_date)
                 if metadata:
                     metadata_list.append(metadata)
+                    # Mark as completed in progress tracker
+                    if self.progress:
+                        self.progress.mark_completed(stock)
             except Exception as e:
                 logger.error(f"Exception downloading {stock}: {e}")
-        
+
         return metadata_list
 
 
-def download_all_data(incremental_days=None, skip_fundamentals=False, skip_metadata=False, start_date=None):
+def download_all_data(incremental_days=None, skip_fundamentals=False, skip_metadata=False, start_date=None, resume=True):
     """
     Main download function
 
@@ -297,6 +308,7 @@ def download_all_data(incremental_days=None, skip_fundamentals=False, skip_metad
         skip_fundamentals: If True, skip quarterly fundamentals download
         skip_metadata: If True, skip stock_basic and stock_industry (faster for incremental updates)
         start_date: Override default start date (YYYY-MM-DD)
+        resume: If True, resume from previous progress (default: True)
     """
     print("=" * 70)
     print("Efficient BaoStock Data Download Program")
@@ -337,11 +349,31 @@ def download_all_data(incremental_days=None, skip_fundamentals=False, skip_metad
     
     print(f"\nDate range: {start_date_str} ~ {end_date_str}")
 
-    # Initialize downloader
+    # Initialize progress tracker
+    progress = DownloadProgress() if resume else None
+    if progress and not resume:
+        progress.reset()
+
+    if progress:
+        print(f"\nResume mode: {'Enabled' if resume else 'Disabled (fresh start)'}")
+        if resume and progress.data.get('completed'):
+            progress.print_summary()
+
+        # Save configuration
+        progress.update_config({
+            'start_date': start_date_str,
+            'end_date': end_date_str,
+            'incremental_days': incremental_days,
+            'skip_fundamentals': skip_fundamentals,
+            'skip_metadata': skip_metadata
+        })
+
+    # Initialize downloader with progress tracker
     downloader = EfficientBaoStockDownloader(
         output_dir=OUTPUT_DIR,
         skip_fundamentals=skip_fundamentals,
-        skip_metadata=skip_metadata
+        skip_metadata=skip_metadata,
+        progress_tracker=progress
     )
     downloader.unified_fetcher.login()
     downloader.standard_fetcher.login()
@@ -380,14 +412,24 @@ def download_all_data(incremental_days=None, skip_fundamentals=False, skip_metad
         
         stock_pool = sorted(list(all_stocks))
         print(f"  Total stocks: {len(stock_pool)}")
-        
+
+        # Update progress total
+        if progress:
+            progress.set_total(len(stock_pool))
+
         # === 2. Determine stocks to download ===
-        existing_stocks = set(downloader.writer.get_existing_stocks(file_type="market"))
-        
         if incremental_days:
+            # Incremental mode: update all existing stocks
+            existing_stocks = set(downloader.writer.get_existing_stocks(file_type="market"))
             need_to_download = sorted(list(existing_stocks))
             print(f"\nIncremental mode: updating {len(need_to_download)} existing stocks")
+        elif progress and resume:
+            # Resume mode: get pending stocks from progress tracker
+            need_to_download = progress.get_pending_stocks(stock_pool)
+            print(f"\nResume mode: {len(need_to_download)} stocks pending")
         else:
+            # Full mode: download new stocks only
+            existing_stocks = set(downloader.writer.get_existing_stocks(file_type="market"))
             need_to_download = [s for s in stock_pool if s not in existing_stocks]
             print(f"\nFull mode: {len(existing_stocks)} stocks exist")
             print(f"  Need to download: {len(need_to_download)} new stocks")
@@ -421,7 +463,12 @@ def download_all_data(incremental_days=None, skip_fundamentals=False, skip_metad
                 fail += len(batch)
         
         print(f"\nDownload complete: {success} success, {fail} failed")
-        
+
+        # Save final progress
+        if progress:
+            progress.save()
+            progress.print_summary()
+
         # === 4. Save metadata ===
         if all_metadata:
             print("\nSaving stock metadata...")
@@ -580,7 +627,7 @@ if __name__ == "__main__":
     import argparse
 
     parser = argparse.ArgumentParser(
-        description="Efficient BaoStock data download program"
+        description="Efficient BaoStock data download program with resume capability"
     )
     parser.add_argument(
         "--incremental",
@@ -599,12 +646,31 @@ if __name__ == "__main__":
         action="store_true",
         help="Skip stock basic info and industry classification (faster, auto-enabled for incremental mode)",
     )
+    parser.add_argument(
+        "--no-resume",
+        action="store_true",
+        help="Disable resume from previous progress (start fresh)",
+    )
+    parser.add_argument(
+        "--reset",
+        action="store_true",
+        help="Reset progress file and start fresh download",
+    )
 
     args = parser.parse_args()
 
+    # Handle reset flag
+    if args.reset:
+        progress = DownloadProgress()
+        progress.reset()
+        print("Progress reset. Starting fresh download...")
+
     incremental = args.incremental or INCREMENTAL_DAYS
+    resume = not args.no_resume and not args.reset
+
     download_all_data(
         incremental_days=incremental,
         skip_fundamentals=args.skip_fundamentals,
-        skip_metadata=args.skip_metadata
+        skip_metadata=args.skip_metadata,
+        resume=resume
     )
