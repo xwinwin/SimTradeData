@@ -38,7 +38,18 @@ class BaoStockFetcher(BaseFetcher):
             if lg.error_code != "0":
                 raise ConnectionError(f"BaoStock login failed: {lg.error_msg}")
             BaoStockFetcher._bs_logged_in = True
+            logger.info("BaoStock login successful")
         BaoStockFetcher._bs_login_count += 1
+
+    @classmethod
+    def _ensure_login(cls):
+        """Ensure BaoStock session is valid, re-login if needed"""
+        if not cls._bs_logged_in:
+            lg = bs.login()
+            if lg.error_code != "0":
+                raise ConnectionError(f"BaoStock re-login failed: {lg.error_msg}")
+            cls._bs_logged_in = True
+            logger.info("BaoStock re-login successful")
 
     def _do_logout(self):
         """BaoStock-specific logout implementation"""

@@ -77,6 +77,7 @@ class DownloadProgress:
             "completed": [],
             "failed": {},
             "partial": {},
+            "stock_pool": [],
             "stats": {
                 "total": 0,
                 "completed": 0,
@@ -211,6 +212,7 @@ class DownloadProgress:
             "completed": [],
             "failed": {},
             "partial": {},
+            "stock_pool": [],
             "stats": {
                 "total": 0,
                 "completed": 0,
@@ -221,6 +223,16 @@ class DownloadProgress:
         if self.progress_file.exists():
             self.progress_file.unlink()
         logger.info("Progress reset")
+
+    def save_stock_pool(self, stock_pool: List[str]):
+        """Save stock pool to avoid re-fetching on resume"""
+        self.data["stock_pool"] = stock_pool
+        self.save()
+        logger.info(f"Saved stock pool: {len(stock_pool)} stocks")
+
+    def get_stock_pool(self) -> List[str]:
+        """Get cached stock pool"""
+        return self.data.get("stock_pool", [])
 
     def print_summary(self):
         """Print progress summary"""

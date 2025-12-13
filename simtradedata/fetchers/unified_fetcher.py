@@ -171,10 +171,31 @@ class UnifiedDataFetcher(BaoStockFetcher):
             logger.error(f"Timeout fetching {symbol}, skipping")
             raise
 
+        # Check for login expiration and retry once
         if rs.error_code != "0":
-            raise RuntimeError(
-                f"Failed to query unified data for {symbol}: {rs.error_msg}"
-            )
+            if "未登录" in rs.error_msg or "登录" in rs.error_msg:
+                # Session expired, re-login and retry
+                logger.warning(f"BaoStock session expired, re-logging in...")
+                from simtradedata.fetchers.baostock_fetcher import BaoStockFetcher
+                BaoStockFetcher._bs_logged_in = False  # Reset login state
+                BaoStockFetcher._ensure_login()  # Re-login
+
+                # Retry the API call
+                try:
+                    rs = _run_with_timeout(
+                        api_call,
+                        60,
+                        f"BaoStock API timeout for {symbol} (retry)"
+                    )
+                except TimeoutError:
+                    logger.error(f"Timeout fetching {symbol} (retry), skipping")
+                    raise
+
+            # Check error again after potential retry
+            if rs.error_code != "0":
+                raise RuntimeError(
+                    f"Failed to query unified data for {symbol}: {rs.error_msg}"
+                )
         
         df = rs.get_data()
 
