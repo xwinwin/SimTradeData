@@ -664,8 +664,8 @@ def download_all_data(incremental_days=None, skip_fundamentals=False, skip_metad
                         if 'index_constituents' in existing_meta.index:
                             try:
                                 existing_index_constituents = json.loads(existing_meta['index_constituents'])
-                            except:
-                                pass
+                            except (json.JSONDecodeError, TypeError, ValueError):
+                                pass  # Invalid JSON, use empty dict
             except (FileNotFoundError, KeyError):
                 pass  # No existing metadata
 
