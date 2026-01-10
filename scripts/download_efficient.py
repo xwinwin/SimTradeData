@@ -513,35 +513,37 @@ def download_all_data(incremental_days=None, skip_fundamentals=False, skip_metad
                 print(f"\nFull mode: {len(existing_stocks)} stocks exist")
                 print(f"  Need to download: {len(need_to_download)} new stocks")
             
-            if not need_to_download:
-                print("\nAll stocks already downloaded!")
-                return
-            
             # === 3. Download stocks in batches ===
-            batches = [
-                need_to_download[i:i+BATCH_SIZE]
-                for i in range(0, len(need_to_download), BATCH_SIZE)
-            ]
-            
-            print(f"\nDownloading {len(need_to_download)} stocks in {len(batches)} batches...")
-            print(f"Batch size: {BATCH_SIZE} (sequential processing)")
-            print("Note: BaoStock does not support concurrent downloads\n")
-            
-            all_metadata = []
-            success = 0
-            fail = 0
-            
-            for batch_idx, batch in enumerate(tqdm(batches, desc="Downloading batches", position=0)):
-                try:
-                    metadata_list = downloader.download_batch(batch, start_date_str, end_date_str)
-                    all_metadata.extend(metadata_list)
-                    success += len(metadata_list)
-                    fail += len(batch) - len(metadata_list)
-                except Exception as e:
-                    logger.error(f"Batch {batch_idx} failed: {e}")
-                    fail += len(batch)
-            
-            print(f"\nDownload complete: {success} success, {fail} failed")
+            if not need_to_download:
+                print("\nAll stocks already downloaded! Skipping stock download...")
+                all_metadata = []
+                success = 0
+                fail = 0
+            else:
+                batches = [
+                    need_to_download[i:i+BATCH_SIZE]
+                    for i in range(0, len(need_to_download), BATCH_SIZE)
+                ]
+
+                print(f"\nDownloading {len(need_to_download)} stocks in {len(batches)} batches...")
+                print(f"Batch size: {BATCH_SIZE} (sequential processing)")
+                print("Note: BaoStock does not support concurrent downloads\n")
+
+                all_metadata = []
+                success = 0
+                fail = 0
+
+                for batch_idx, batch in enumerate(tqdm(batches, desc="Downloading batches", position=0)):
+                    try:
+                        metadata_list = downloader.download_batch(batch, start_date_str, end_date_str)
+                        all_metadata.extend(metadata_list)
+                        success += len(metadata_list)
+                        fail += len(batch) - len(metadata_list)
+                    except Exception as e:
+                        logger.error(f"Batch {batch_idx} failed: {e}")
+                        fail += len(batch)
+
+                print(f"\nDownload complete: {success} success, {fail} failed")
 
             # Save final progress
             if progress:
