@@ -1,5 +1,5 @@
 """
-Data validators for ensuring data quality before writing to HDF5
+Data validators for ensuring data quality before writing to storage
 
 This module provides validation functions to check data integrity,
 field completeness, and value ranges before persisting data.
@@ -253,7 +253,7 @@ def validate_before_write(
     strict: bool = False
 ) -> bool:
     """
-    Validate data before writing to HDF5
+    Validate data before writing to storage
 
     Args:
         data: DataFrame to validate

@@ -1,5 +1,5 @@
 """Writers package"""
 
-from simtradedata.writers.h5_writer import HDF5Writer
+from simtradedata.writers.duckdb_writer import DuckDBWriter
 
-__all__ = ["HDF5Writer"]
+__all__ = ["DuckDBWriter"]

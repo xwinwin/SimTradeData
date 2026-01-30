@@ -7,13 +7,12 @@ in a single API call, reducing redundant queries.
 
 import logging
 import platform
-from typing import Optional
 
 import baostock as bs
 import pandas as pd
 
 from simtradedata.fetchers.baostock_fetcher import BaoStockFetcher
-from simtradedata.utils.code_utils import convert_from_ptrade_code, retry_on_failure
+from simtradedata.utils.code_utils import convert_from_ptrade_code
 from simtradedata.config.field_mappings import MARKET_FIELD_MAP
 
 logger = logging.getLogger(__name__)
@@ -30,16 +29,16 @@ else:
 
 # All fields that can be fetched from query_history_k_data_plus in one call
 UNIFIED_DAILY_FIELDS = [
-    # === Market data (ptrade_data.h5/stock_data) ===
-    "date", "open", "high", "low", "close", "volume", "amount",
-    
-    # === Valuation data (ptrade_fundamentals.h5/valuation) ===
+    # === Market data ===
+    "date", "open", "high", "low", "close", "preclose", "volume", "amount",
+
+    # === Valuation data ===
     "peTTM",      # PE ratio TTM
     "pbMRQ",      # PB ratio
     "psTTM",      # PS ratio TTM
     "pcfNcfTTM",  # PCF ratio TTM
     "turn",       # Turnover rate
-    
+
     # === Status data (for building stock_status_history) ===
     "isST",       # ST status (1=ST, 0=normal)
     "tradestatus" # Trading status (1=normal, 0=halted)
@@ -218,45 +217,6 @@ class UnifiedDataFetcher(BaoStockFetcher):
         )
         
         return df
-    
-    def fetch_unified_daily_data_batch(
-        self,
-        symbols: list,
-        start_date: str,
-        end_date: str,
-        frequency: str = "d",
-        adjustflag: str = "3"
-    ) -> dict:
-        """
-        Fetch unified daily data for multiple stocks
-        
-        Args:
-            symbols: List of stock codes in PTrade format
-            start_date: Start date (YYYY-MM-DD)
-            end_date: End date (YYYY-MM-DD)
-            frequency: d=daily, w=weekly, m=monthly
-            adjustflag: "1"=forward, "2"=backward, "3"=none
-        
-        Returns:
-            Dict mapping symbol to DataFrame
-        """
-        result = {}
-        
-        for symbol in symbols:
-            try:
-                df = self.fetch_unified_daily_data(
-                    symbol, start_date, end_date, frequency, adjustflag
-                )
-                if not df.empty:
-                    result[symbol] = df
-            except Exception as e:
-                logger.error(f"Failed to fetch unified data for {symbol}: {e}")
-        
-        logger.info(
-            f"Batch fetch complete: {len(result)}/{len(symbols)} stocks successful"
-        )
-
-        return result
 
     def fetch_index_data(
         self,

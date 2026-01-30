@@ -102,44 +102,18 @@ class BaoStockFetcher(BaseFetcher):
 
         # Note: BaoStock returns 'dividOperateDate', not 'date'
         df = df.rename(columns={"dividOperateDate": "date"})
-
         df["date"] = pd.to_datetime(df["date"])
 
-        # Convert adjust factors to numeric with validation
-        # Use strict conversion to detect data quality issues
-        try:
-            df["foreAdjustFactor"] = pd.to_numeric(df["foreAdjustFactor"])
-            df["backAdjustFactor"] = pd.to_numeric(df["backAdjustFactor"])
-        except ValueError as e:
-            # Log specific rows with invalid data
-            invalid_fore = df[pd.to_numeric(df["foreAdjustFactor"], errors="coerce").isna()]["foreAdjustFactor"]
-            invalid_back = df[pd.to_numeric(df["backAdjustFactor"], errors="coerce").isna()]["backAdjustFactor"]
+        # Convert adjust factors to numeric
+        df["foreAdjustFactor"] = pd.to_numeric(df["foreAdjustFactor"], errors="coerce")
+        df["backAdjustFactor"] = pd.to_numeric(df["backAdjustFactor"], errors="coerce")
 
-            if len(invalid_fore) > 0:
-                logger.error(
-                    f"Invalid foreAdjustFactor values for {symbol}: {invalid_fore.head().tolist()}"
-                )
-            if len(invalid_back) > 0:
-                logger.error(
-                    f"Invalid backAdjustFactor values for {symbol}: {invalid_back.head().tolist()}"
-                )
-
-            # Use coerce as fallback but log warning
+        # Log warning if NaN values were introduced
+        nan_count = df["backAdjustFactor"].isna().sum()
+        if nan_count > 0:
             logger.warning(
-                f"Converting adjust factors with coerce for {symbol} due to invalid values. "
-                f"Data quality may be compromised."
+                f"{symbol}: {nan_count}/{len(df)} adjust factors are invalid/NaN"
             )
-            df["foreAdjustFactor"] = pd.to_numeric(df["foreAdjustFactor"], errors="coerce")
-            df["backAdjustFactor"] = pd.to_numeric(df["backAdjustFactor"], errors="coerce")
-
-            # Check how many NaN values were introduced
-            nan_count = df["backAdjustFactor"].isna().sum()
-            if nan_count > 0:
-                logger.warning(
-                    f"{symbol}: {nan_count}/{len(df)} adjust factors converted to NaN"
-                )
-
-        # Note: Keep 'date' as column for converter to handle
 
         logger.info(f"Fetched {len(df)} adjust factor rows for {symbol}")
 
@@ -186,14 +160,8 @@ class BaoStockFetcher(BaseFetcher):
         Returns:
             DataFrame with industry classification
         """
-
         bs_code = convert_from_ptrade_code(symbol, "baostock")
-
-        if date is None:
-            date = datetime.now().strftime("%Y-%m-%d")
-
-        # Use the date string directly (YYYY-MM-DD) – BaoStock expects this format
-        date_str = date
+        date_str = date or datetime.now().strftime("%Y-%m-%d")
 
         rs = bs.query_stock_industry(code=bs_code, date=date_str)
 
@@ -251,34 +219,21 @@ class BaoStockFetcher(BaseFetcher):
             - 000300.SS (沪深300): query_hs300_stocks
             - 000905.SS (中证500): query_zz500_stocks
         """
+        query_date = date or datetime.now().strftime("%Y-%m-%d")
 
-        query_date = date
-        if query_date is None:
-            query_date = datetime.now().strftime("%Y-%m-%d")
-
-        # Map PTrade index codes to BaoStock query methods
-        index_map = {
-            "000016.SS": "sz50",  # 上证50
-            "000300.SS": "hs300",  # 沪深300
-            "000905.SS": "zz500",  # 中证500
+        # Map PTrade index codes to BaoStock query functions
+        index_query_map = {
+            "000016.SS": bs.query_sz50_stocks,
+            "000300.SS": bs.query_hs300_stocks,
+            "000905.SS": bs.query_zz500_stocks,
         }
 
-        if index_code not in index_map:
+        query_func = index_query_map.get(index_code)
+        if query_func is None:
             logger.warning(f"Index {index_code} not supported by BaoStock")
             return pd.DataFrame()
 
-        index_type = index_map[index_code]
-
-        # Call corresponding BaoStock API
-        if index_type == "sz50":
-            rs = bs.query_sz50_stocks(date=query_date)
-        elif index_type == "hs300":
-            rs = bs.query_hs300_stocks(date=query_date)
-        elif index_type == "zz500":
-            rs = bs.query_zz500_stocks(date=query_date)
-        else:
-            logger.warning(f"Unknown index type: {index_type}")
-            return pd.DataFrame()
+        rs = query_func(date=query_date)
 
         if rs.error_code != "0":
             raise RuntimeError(
@@ -299,70 +254,50 @@ class BaoStockFetcher(BaseFetcher):
     ) -> pd.DataFrame:
         """
         Fetch all quarterly fundamentals for a stock
-        
+
         Combines data from 5 BaoStock APIs:
         - query_profit_data (盈利能力)
         - query_growth_data (成长能力)
         - query_balance_data (偿债能力)
         - query_operation_data (营运能力)
         - query_cash_flow_data (现金流量)
-        
+
         Args:
             symbol: Stock code in PTrade format
             year: Year (e.g., 2024)
             quarter: Quarter (1-4)
-        
+
         Returns:
             DataFrame with PTrade format fields including publ_date and end_date
         """
         bs_code = convert_from_ptrade_code(symbol, "baostock")
-        
-        # Fetch from all 5 APIs
+
+        # Define all API calls
+        api_calls = [
+            bs.query_profit_data,
+            bs.query_growth_data,
+            bs.query_balance_data,
+            bs.query_operation_data,
+            bs.query_cash_flow_data,
+        ]
+
+        # Fetch from all APIs
         dfs = []
-        
-        # 1. Profit data (盈利能力)
-        rs = bs.query_profit_data(code=bs_code, year=year, quarter=quarter)
-        if rs.error_code == "0":
-            df = rs.get_data()
-            if not df.empty:
-                dfs.append(df)
-        
-        # 2. Growth data (成长能力)
-        rs = bs.query_growth_data(code=bs_code, year=year, quarter=quarter)
-        if rs.error_code == "0":
-            df = rs.get_data()
-            if not df.empty:
-                dfs.append(df)
-        
-        # 3. Balance data (偿债能力)
-        rs = bs.query_balance_data(code=bs_code, year=year, quarter=quarter)
-        if rs.error_code == "0":
-            df = rs.get_data()
-            if not df.empty:
-                dfs.append(df)
-        
-        # 4. Operation data (营运能力)
-        rs = bs.query_operation_data(code=bs_code, year=year, quarter=quarter)
-        if rs.error_code == "0":
-            df = rs.get_data()
-            if not df.empty:
-                dfs.append(df)
-        
-        # 5. Cash flow data (现金流量)
-        rs = bs.query_cash_flow_data(code=bs_code, year=year, quarter=quarter)
-        if rs.error_code == "0":
-            df = rs.get_data()
-            if not df.empty:
-                dfs.append(df)
-        
+        for api_func in api_calls:
+            rs = api_func(code=bs_code, year=year, quarter=quarter)
+            if rs.error_code == "0":
+                df = rs.get_data()
+                if not df.empty:
+                    dfs.append(df)
+
         if not dfs:
             logger.debug(f"No fundamentals data for {symbol} {year}Q{quarter}")
             return pd.DataFrame()
-        
+
         # Merge all dataframes on common keys
         result = dfs[0]
         merge_keys = ['code', 'pubDate', 'statDate']
-        
+
         for df in dfs[1:]:
             result = result.merge(df, on=merge_keys, how='outer', suffixes=('', '_dup'))
             # Remove duplicate columns
@@ -400,6 +335,10 @@ class BaoStockFetcher(BaseFetcher):
             
             # Cash flow
             'ebitToInterest': 'interest_cover',
+
+            # Share data (from profit data, needed for valuation)
+            'totalShare': 'total_shares',
+            'liqaShare': 'a_floats',
         }
         
         # Rename columns
@@ -421,7 +360,7 @@ class BaoStockFetcher(BaseFetcher):
             'current_ratio', 'quick_ratio', 'debt_equity_ratio',
             'accounts_receivables_turnover_rate', 'inventory_turnover_rate',
             'current_assets_turnover_rate', 'total_asset_turnover_rate',
-            'interest_cover'
+            'interest_cover', 'total_shares', 'a_floats'
         ]
         
         for field in numeric_fields:
@@ -429,4 +368,113 @@ class BaoStockFetcher(BaseFetcher):
                 result[field] = pd.to_numeric(result[field], errors='coerce')
         
         logger.info(f"Fetched fundamentals for {symbol} {year}Q{quarter}: {len(result)} rows")
+        return result
+
+    @retry_on_failure()
+    def fetch_dividend_data(
+        self, symbol: str, year: int, year_type: str = "operate"
+    ) -> pd.DataFrame:
+        """
+        Fetch dividend (ex-rights and ex-dividend) data for a stock
+
+        Args:
+            symbol: Stock code in PTrade format (e.g., '600000.SH')
+            year: Year to query (e.g., 2024)
+            year_type: "report" for announcement year, "operate" for ex-date year
+
+        Returns:
+            DataFrame with columns mapped to PTrade format:
+            - date: ex-dividend date (dividOperateDate)
+            - allotted_ps: allotted shares per share (not provided by BaoStock, set to 0)
+            - rationed_ps: rationed shares per share (dividReserveToStockPs)
+            - rationed_px: rationed price (not provided by BaoStock, set to 0)
+            - bonus_ps: bonus shares per share (dividStocksPs)
+            - dividend: cash dividend per share before tax (dividCashPsBeforeTax)
+        """
+        bs_code = convert_from_ptrade_code(symbol, "baostock")
+
+        rs = bs.query_dividend_data(
+            code=bs_code, year=str(year), yearType=year_type
+        )
+
+        if rs.error_code != "0":
+            raise RuntimeError(
+                f"Failed to query dividend data for {symbol} year {year}: {rs.error_msg}"
+            )
+
+        # Use get_data() instead of iterating with next()
+        df = rs.get_data()
+
+        if df.empty:
+            logger.debug(f"No dividend data for {symbol} year {year}")
+            return pd.DataFrame()
+
+        # Filter only records with valid ex-dividend date
+        df = df[df["dividOperateDate"].notna() & (df["dividOperateDate"] != "")]
+
+        if df.empty:
+            logger.debug(f"No valid dividend records for {symbol} year {year}")
+            return pd.DataFrame()
+
+        # Map to PTrade format
+        result = pd.DataFrame()
+        result["date"] = pd.to_datetime(df["dividOperateDate"])
+
+        # BaoStock does not provide allotted shares info, set to 0
+        result["allotted_ps"] = 0.0
+
+        # rationed_ps: shares from capital reserve conversion (dividReserveToStockPs)
+        result["rationed_ps"] = pd.to_numeric(
+            df["dividReserveToStockPs"], errors="coerce"
+        ).fillna(0.0)
+
+        # rationed_px: BaoStock does not provide rationed price, set to 0
+        result["rationed_px"] = 0.0
+
+        # bonus_ps: bonus shares (dividStocksPs)
+        result["bonus_ps"] = pd.to_numeric(
+            df["dividStocksPs"], errors="coerce"
+        ).fillna(0.0)
+
+        # dividend: cash dividend before tax (dividCashPsBeforeTax)
+        result["dividend"] = pd.to_numeric(
+            df["dividCashPsBeforeTax"], errors="coerce"
+        )
+
+        logger.info(f"Fetched {len(result)} dividend records for {symbol} year {year}")
+        return result
+
+    def fetch_dividend_data_range(
+        self, symbol: str, start_year: int, end_year: int
+    ) -> pd.DataFrame:
+        """
+        Fetch dividend data for a range of years
+
+        Args:
+            symbol: Stock code in PTrade format
+            start_year: Start year (inclusive)
+            end_year: End year (inclusive)
+
+        Returns:
+            DataFrame with all dividend records in the year range
+        """
+        dfs = []
+        for year in range(start_year, end_year + 1):
+            try:
+                df = self.fetch_dividend_data(symbol, year, year_type="operate")
+                if not df.empty:
+                    dfs.append(df)
+            except Exception as e:
+                logger.warning(f"Failed to fetch dividend for {symbol} year {year}: {e}")
+
+        if not dfs:
+            return pd.DataFrame()
+
+        result = pd.concat(dfs, ignore_index=True)
+        result = result.drop_duplicates(subset=["date"]).sort_values("date")
+
+        logger.info(
+            f"Fetched {len(result)} total dividend records for {symbol} "
+            f"({start_year}-{end_year})"
+        )
         return result

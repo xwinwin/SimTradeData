@@ -1,469 +1,264 @@
 # SimTradeData - 高效量化交易数据下载工具
 
-> 🚀 **优化的BaoStock数据下载** | 📊 **PTrade格式兼容** | ⚡ **API调用减少33%**
+> **优化的BaoStock数据下载** | **PTrade格式兼容** | **DuckDB + Parquet存储**
 
-**SimTradeData** 是为 [SimTradeLab](https://github.com/kay-ou/SimTradeLab) 设计的高效数据下载工具。通过智能的API调用优化，在单次请求中获取多种数据类型，显著提升下载效率。
+**SimTradeData** 是为 [SimTradeLab](https://github.com/kay-ou/SimTradeLab) 设计的高效数据下载工具。采用 DuckDB 作为中间存储，导出为 Parquet 格式，支持高效的增量更新和数据查询。
 
 ---
 
 <div align="center">
 
-### 💎 推荐组合：SimTradeData + SimTradeLab
+### 推荐组合：SimTradeData + SimTradeLab
 
-** 完全兼容PTrade | 回测速度提升10倍以上**
+**完全兼容PTrade | 回测速度提升20倍以上**
 
 [![SimTradeLab](https://img.shields.io/badge/SimTradeLab-量化回测框架-blue?style=for-the-badge)](https://github.com/kay-ou/SimTradeLab)
 
-🎯 **无需修改PTrade策略代码** | 🚀 **极速本地回测** | 💰 **零成本解决方案**
+**无需修改PTrade策略代码** | **极速本地回测** | **零成本解决方案**
 
 </div>
 
 ---
 
+## 核心特性
 
-**快速迁移**：
-```bash
-# 1. 下载数据（本工具）
-poetry run python scripts/download_efficient.py
+### 高效存储架构
+- **DuckDB 中间存储**: 高性能列式数据库，支持 SQL 查询和增量更新
+- **Parquet 导出格式**: 压缩高效，跨平台兼容，适合大规模数据分析
+- **自动增量更新**: 智能识别已下载数据，仅更新增量部分
 
-# 2. 复制到SimTradeLab
-cp data/*.h5 /path/to/SimTradeLab/data/
-
-# 3. 运行策略（享受10倍速度提升）
-# 无需修改任何PTrade策略代码！
-```
-
-**适用场景**：
-- ✅ 策略研发：快速迭代测试
-- ✅ 参数优化：大规模参数扫描
-- ✅ 因子挖掘：高频因子回测
-- ✅ 学习研究：免费学习量化
-
-## ✨ 核心特性
-
-### 🎯 性能优化
-- **统一数据获取**: 一次API调用同时获取行情、估值、状态数据
-- **API调用优化**: 相比传统方法减少 **33%** 的API调用次数
-- **增量更新支持**: 智能识别已下载数据，仅更新增量部分
-- **断点续传**: 中断后自动跳过已完成的股票
-
-### 📦 数据完整性
-- **市场数据**: OHLCV日线数据，自动复权
-- **估值指标**: PE/PB/PS/PCF/换手率/**市值数据**
-  - ✅ **总市值/流通市值**: 实时计算，准确可靠
-  - ✅ **总股本/流通股本**: 从财务数据自动提取
-- **财务数据**: 23个季度财务指标
-  - ✅ **TTM指标**: 滚动12个月指标自动计算（ROE_TTM、ROA_TTM等）
-  - ✅ **盈利/成长/偿债/营运能力**: 完整覆盖
+### 数据完整性
+- **市场数据**: OHLCV 日线数据，含涨跌停价、前收盘价
+- **估值指标**: PE/PB/PS/PCF/换手率/总股本/流通股
+- **财务数据**: 23个季度财务指标 + TTM指标自动计算
+- **除权除息**: 分红、送股、配股数据
 - **复权因子**: 前复权/后复权因子
-- **股票元数据**: 上市日期、退市日期、行业分类
-- **指数成分股**: 上证50、沪深300、中证500等
-- **交易日历**: 完整的A股交易日历
+- **元数据**: 股票信息、交易日历、指数成分股、ST/停牌状态
 
-### 🛡️ 数据质量保障
-- **自动验证**: 写入前自动验证数据完整性和合理性
-  - 必需字段检查
-  - 数值范围验证（如close>0, high>=low）
-  - 重复数据检测
-  - NaN值监控
-- **类型转换追踪**: 记录所有数据类型转换异常
+### 数据质量保障
+- **自动验证**: 写入前自动验证数据完整性
+- **导出时计算**: 涨跌停价、TTM指标等在导出时计算，确保数据一致性
 - **详细日志**: 完整的错误日志和警告信息
 
-## 📦 生成的数据文件
+## 生成的数据结构
 
-| 文件名 | 说明 | 数据内容 |
-|--------|------|----------|
-| `ptrade_data.h5` | 主数据文件 | 股票行情(OHLCV)、基准指数、除权除息、股票元数据、交易日历 |
-| `ptrade_fundamentals.h5` | 财务/估值数据 | **估值指标**(PE/PB/PS/PCF/换手率/**市值**/股本) + **财务指标**(23个季度指标+TTM) |
-| `ptrade_adj_pre.h5` | 复权因子 | 每只股票的历史复权因子序列 |
+```
+data/
+├── simtradedata.duckdb          # DuckDB 数据库（下载时使用）
+└── parquet/                     # 导出的 Parquet 文件
+    ├── stocks/                  # 股票日线行情（每股票一个文件）
+    │   ├── 000001.SZ.parquet
+    │   └── 600000.SS.parquet
+    ├── exrights/                # 除权除息事件
+    ├── fundamentals/            # 季度财务数据（含TTM）
+    ├── valuation/               # 估值指标（日频）
+    ├── metadata/                # 元数据
+    │   ├── stock_metadata.parquet
+    │   ├── benchmark.parquet
+    │   ├── trade_days.parquet
+    │   ├── index_constituents.parquet
+    │   ├── stock_status.parquet
+    │   └── version.parquet
+    ├── ptrade_adj_pre.parquet   # 前复权因子
+    ├── ptrade_adj_post.parquet  # 后复权因子
+    └── manifest.json            # 数据包清单
+```
 
-**数据亮点**:
-- ✅ 市值数据完整可用（总市值、流通市值、总股本、流通股本）
-- ✅ TTM指标正确计算（ROE_TTM、ROA_TTM、净利率TTM等）
-- ✅ 所有数据经过验证，质量可靠
+## 快速开始
 
-## 📥 数据获取
+### 方式一：直接下载现成数据（推荐）
 
-### 方式一：直接下载（推荐新手）⭐
+已导出的 Parquet 数据包（2015年至今），可直接用于 SimTradeLab 回测：
 
-SimTradeLab 可用的回测数据已分享在夸克网盘，可直接下载使用：
+> 夸克网盘分享：[simtradelab_data_2025_parquet.tar.gz](https://pan.quark.cn/s/9934dd589d22)
+>
+> 提取码：WNr9
 
-**夸克网盘「simtradedata」**
-- 🔗 链接：https://pan.quark.cn/s/4fb50fcfe674
-- 🔑 提取码：`h2dQ`
-- 数据时间范围：2025-01-01 到 2025-10-31
+```bash
+# 解压到 SimTradeLab 数据目录
+tar -xzf simtradelab_data_2025_parquet.tar.gz -C /path/to/SimTradeLab/data/
+```
 
-下载后解压，将 `.h5` 文件放入 SimTradeLab 的 `data/` 目录即可使用。
+### 方式二：自行下载数据
 
-### 方式二：自行下载（可定制）
-
-如需自定义数据范围或更新最新数据，请参考下方"快速开始"章节自行运行下载脚本。
-
-## 🚀 快速开始
-
-### 1. 安装依赖
+#### 1. 安装依赖
 
 ```bash
 # 克隆项目
 git clone https://github.com/kay-ou/SimTradeData.git
 cd SimTradeData
 
-# 安装依赖(使用 Poetry)
+# 安装依赖
 poetry install
 
 # 激活虚拟环境
 poetry shell
 ```
 
-### 2. 下载数据
+#### 2. 下载数据
 
 ```bash
-# 【首次下载】下载全部数据（2017至今）
+# 首次下载：下载全部数据（2017至今）
 poetry run python scripts/download_efficient.py
 
-# 【增量更新】更新最近7天数据
-poetry run python scripts/download_efficient.py --incremental 7
-
-# 【跳过财务数据】仅下载行情和估值数据（更快）
+# 跳过财务数据（更快）
 poetry run python scripts/download_efficient.py --skip-fundamentals
+
+# 指定起始日期
+poetry run python scripts/download_efficient.py --start-date 2020-01-01
 ```
 
-### 3. 在 SimTradeLab 中使用
-
-生成的 HDF5 文件可直接放入 [SimTradeLab](https://github.com/kay-ou/SimTradeLab) 的数据目录使用：
+#### 3. 导出为 Parquet
 
 ```bash
-# 复制生成的文件到 SimTradeLab 数据目录
-cp data/*.h5 /path/to/SimTradeLab/data/
+# 导出为 PTrade 兼容的 Parquet 格式
+poetry run python scripts/export_parquet.py
+
+# 指定输出目录
+poetry run python scripts/export_parquet.py --output data/parquet
 ```
 
-**性能提升**：配合SimTradeLab使用，相比PTrade平台可获得：
-- 🚀 **10倍以上回测速度提升**
-- 💰 **零数据成本**（完全免费）
-- 🔧 **完全兼容**（无需修改PTrade策略代码）
-- 🔒 **本地运行**（数据隐私安全）
+#### 4. 在 SimTradeLab 中使用
 
-## ⚡ 性能优化详解
-
-### 传统方法 vs 优化方法
-
-**传统方法**（每股6次API调用）:
-```
-1. 获取市场数据（OHLCV）
-2. 获取估值数据（PE/PB/PS）
-3. 获取ST状态
-4. 获取复权因子
-5. 获取基本信息
-6. 获取行业分类
+```bash
+# 复制 Parquet 文件到 SimTradeLab 数据目录
+cp -r data/parquet/* /path/to/SimTradeLab/data/
 ```
 
-**优化方法**（每股4次API调用）:
-```
-1. 统一获取（市场+估值+状态）← 三合一！
-2. 获取复权因子
-3. 获取基本信息
-4. 获取行业分类
-```
-
-**性能对比**:
-| 指标 | 传统方法 | 优化方法 | 提升 |
-|------|---------|---------|------|
-| API调用/股 | 6次 | 4次 | **-33%** |
-| 5000股总调用 | 30,000次 | 20,000次 | 节省10,000次 |
-
-### 下载时间估算
-
-以5000只股票为例：
-
-| 模式 | 时间范围 | 预计耗时 | 说明 |
-|------|---------|---------|------|
-| 首次完整下载 | 2017-01-01 至今 | ~8-10小时 | 包含所有历史数据 |
-| 增量更新(7天) | 最近7天 | ~30-40分钟 | 仅更新最新数据 |
-| 增量更新(30天) | 最近30天 | ~2-3小时 | 适合月度更新 |
-
-## 🏗️ 项目架构
+## 项目架构
 
 ```
 SimTradeData/
 ├── scripts/
-│   └── download_efficient.py      # 主下载脚本（优化版）
+│   ├── download_efficient.py    # 主下载脚本
+│   └── export_parquet.py        # Parquet 导出脚本
 ├── simtradedata/
 │   ├── fetchers/
-│   │   ├── base_fetcher.py       # 基础Fetcher类（消除重复）
-│   │   ├── baostock_fetcher.py   # BaoStock基础封装
-│   │   ├── unified_fetcher.py    # 统一数据获取（核心优化）
-│   │   └── mootdx_fetcher.py     # Mootdx数据源（可选）
+│   │   ├── base_fetcher.py      # 基础 Fetcher 类
+│   │   ├── baostock_fetcher.py  # BaoStock 数据获取
+│   │   └── unified_fetcher.py   # 统一数据获取（优化版）
 │   ├── processors/
-│   │   └── data_splitter.py      # 数据分流处理
-│   ├── converters/
-│   │   └── data_converter.py     # 数据格式转换
-│   ├── validators/
-│   │   └── data_validator.py     # 数据质量验证
+│   │   └── data_splitter.py     # 数据分流处理
 │   ├── writers/
-│   │   └── h5_writer.py          # HDF5写入（集成验证）
+│   │   └── duckdb_writer.py     # DuckDB 写入和导出
+│   ├── validators/
+│   │   └── data_validator.py    # 数据质量验证
 │   ├── config/
-│   │   └── field_mappings.py     # 集中的字段映射配置
+│   │   └── field_mappings.py    # 字段映射配置
 │   └── utils/
-│       ├── code_utils.py         # 工具函数
-│       ├── ttm_calculator.py     # TTM指标计算
-│       └── market_cap_calculator.py  # 市值计算
-├── data/                          # 生成的H5文件
-└── docs/                          # 文档
-    ├── ARCHITECTURE_REVIEW.md     # 架构审查报告
-    ├── FIXES_SUMMARY.md          # 修复总结
-    └── REDUNDANCY_REPORT.md      # 冗余代码报告
+│       ├── code_utils.py        # 股票代码转换
+│       └── ttm_calculator.py    # 季度范围计算
+├── data/                        # 数据目录
+└── docs/                        # 文档
+    ├── PTRADE_PARQUET_FORMAT.md # Parquet 格式规范
+    └── PTrade_API_mini_Reference.md
 ```
 
-### 核心模块说明
+### 核心模块
 
-**1. BaseFetcher** - 统一的Fetcher基类
-- 消除150行重复代码
-- 统一登录/登出/上下文管理器
-- 新增数据源只需实现2个方法
+**1. UnifiedDataFetcher** - 统一数据获取
+- 一次 API 调用获取行情、估值、状态数据
+- 减少 API 调用次数 33%
 
-**2. UnifiedDataFetcher** - 统一数据获取
-- 一次API调用获取多种数据类型
-- 减少网络请求次数33%
-- 自动处理数据类型转换
+**2. DuckDBWriter** - 数据存储和导出
+- 高效的增量写入（upsert）
+- 导出时计算涨跌停价、TTM指标
+- Forward fill 季度数据到日频
 
-**3. DataSplitter** - 智能数据分流
-- 将统一数据分流到不同目标
-- 市场数据 → `ptrade_data.h5/stock_data`
-- 估值数据 → `ptrade_fundamentals.h5/valuation`
-- 状态数据 → 内存缓存（用于构建历史）
+**3. DataSplitter** - 数据分流
+- 将统一数据按类型分流到不同表
 
-**4. DataValidator** - 数据质量验证
-- 写入前自动验证数据完整性
-- 检测异常值和缺失数据
-- 详细的验证日志
+## 数据字段说明
 
-**5. MarketCapCalculator** - 市值计算
-- 从财务数据提取股本信息
-- 自动计算总市值和流通市值
-- Forward-fill季度数据到日线
+### stocks/ - 股票日线
+| 字段 | 说明 |
+|------|------|
+| date | 交易日期 |
+| open/high/low/close | OHLC价格 |
+| high_limit/low_limit | 涨跌停价（导出时计算） |
+| preclose | 前收盘价 |
+| volume | 成交量（股） |
+| money | 成交金额（元） |
 
-**6. TTMCalculator** - TTM指标计算
-- 滚动12个月指标计算
-- 支持ROE_TTM、ROA_TTM等
-- 自动处理数据不足情况
+### valuation/ - 估值指标（日频）
+| 字段 | 说明 |
+|------|------|
+| pe_ttm/pb/ps_ttm/pcf | 估值比率 |
+| roe/roe_ttm/roa/roa_ttm | 盈利指标（季报forward fill） |
+| naps | 每股净资产（导出时计算） |
+| total_shares/a_floats | 总股本/流通股 |
+| turnover_rate | 换手率 |
 
-**7. HDF5Writer** - 高效数据写入
-- 支持增量追加写入
-- 集成数据验证
-- 压缩存储（blosc压缩算法）
+### fundamentals/ - 财务数据（季频）
+包含23个财务指标及其TTM版本，详见 [PTRADE_PARQUET_FORMAT.md](docs/PTRADE_PARQUET_FORMAT.md)
 
-## 📊 数据结构
+## 配置说明
 
-### ptrade_data.h5
-```
-/stock_data/{symbol}     - 股票OHLCV数据
-/exrights/{symbol}       - 除权除息数据
-/stock_metadata          - 股票元数据（名称、上市日期等）
-/trade_days              - 交易日历
-/benchmark               - 基准指数数据
-/metadata                - 全局元数据（包含指数成分股历史）
-```
-
-### ptrade_fundamentals.h5
-```
-/valuation/{symbol}      - 估值指标（PE/PB/PS/PCF/换手率+市值+股本）
-  ├── pe_ttm             - 市盈率TTM
-  ├── pb                 - 市净率
-  ├── ps_ttm             - 市销率TTM
-  ├── pcf                - 市现率
-  ├── turnover_rate      - 换手率
-  ├── total_shares       - 总股本（亿股）
-  ├── total_value        - 总市值（元）
-  └── float_value        - 流通市值（元）
-
-/fundamentals/{symbol}   - 财务指标（23个季度指标）
-  ├── roe, roe_ttm       - 净资产收益率及TTM
-  ├── roa, roa_ttm       - 总资产净利率及TTM
-  ├── net_profit_ratio, net_profit_ratio_ttm  - 销售净利率及TTM
-  ├── gross_income_ratio, gross_income_ratio_ttm  - 销售毛利率及TTM
-  ├── operating_revenue_grow_rate  - 营收增长率
-  ├── net_profit_grow_rate         - 净利润增长率
-  ├── current_ratio, quick_ratio   - 流动/速动比率
-  ├── debt_equity_ratio            - 资产负债率
-  └── ... (共23个指标)
-```
-
-### ptrade_adj_pre.h5
-```
-/{symbol}                - 后复权因子序列
-```
-
-详细数据结构请参考: [PTrade API参考文档](docs/PTrade_API_mini_Reference.md)
-
-## 🔧 配置说明
-
-编辑 `scripts/download_efficient.py` 中的配置参数:
+编辑 `scripts/download_efficient.py`:
 
 ```python
-# 输出目录配置
-OUTPUT_DIR = "data"            # 输出目录（HDF5文件保存位置）
-LOG_FILE = "data/download_efficient.log"  # 日志文件
+# 日期范围
+START_DATE = "2017-01-01"
+END_DATE = None  # None = 当前日期
 
-# 日期范围配置
-START_DATE = "2017-01-01"      # 起始日期
-END_DATE = None                # 结束日期（None表示当前日期）
-INCREMENTAL_DAYS = None        # 增量天数（None表示完整下载）
+# 输出目录
+OUTPUT_DIR = "data"
 
-# 批次配置
-BATCH_SIZE = 20                # 每批处理股票数
+# 批次大小
+BATCH_SIZE = 20
 ```
 
-## 💡 使用示例
+## 文档
 
-### Python API 使用
+| 文档 | 说明 |
+|------|------|
+| [PTRADE_PARQUET_FORMAT.md](docs/PTRADE_PARQUET_FORMAT.md) | Parquet 数据格式规范 |
+| [PTrade_API_mini_Reference.md](docs/PTrade_API_mini_Reference.md) | PTrade API 参考 |
 
-```python
-from simtradedata.fetchers.unified_fetcher import UnifiedDataFetcher
-from simtradedata.processors.data_splitter import DataSplitter
-from simtradedata.writers.h5_writer import HDF5Writer
+## 注意事项
 
-# 初始化组件
-fetcher = UnifiedDataFetcher()
-splitter = DataSplitter()
-writer = HDF5Writer(output_dir="data")  # 输出到data目录
-
-fetcher.login()
-
-try:
-    # 1. 统一获取数据（一次API调用）
-    unified_data = fetcher.fetch_unified_daily_data(
-        symbol="600000.SS",
-        start_date="2024-01-01",
-        end_date="2024-11-22"
-    )
-
-    # 2. 分流数据
-    split_data = splitter.split_data(unified_data)
-
-    # 3. 写入不同文件
-    if 'market' in split_data:
-        writer.write_market_data("600000.SS", split_data['market'])
-
-    if 'valuation' in split_data:
-        writer.write_valuation("600000.SS", split_data['valuation'])
-
-finally:
-    fetcher.logout()
-```
-
-### 批量下载
-
-```python
-from scripts.download_efficient import download_all_data
-
-# 完整下载
-download_all_data(incremental_days=None)
-
-# 增量更新最近7天
-download_all_data(incremental_days=7)
-```
-
-## 📚 文档
-
-| 文档 | 说明 | 状态 |
-|------|------|------|
-| [架构审查报告](docs/ARCHITECTURE_REVIEW.md) | 完整的架构分析和改进建议 | ✅ 完成 |
-| [修复总结](docs/FIXES_SUMMARY.md) | P0/P1数据质量修复详情 | ✅ 完成 |
-| [冗余代码报告](docs/REDUNDANCY_REPORT.md) | 代码重构和优化记录 | ✅ 完成 |
-| [PTrade API参考](docs/PTrade_API_mini_Reference.md) | PTrade数据格式和API文档 | ✅ 完成 |
-| [数据映射方案](docs/DATA_MAPPING.md) | BaoStock到PTrade格式的映射 | ✅ 完成 |
-| [BaoStock完整下载方案](docs/BaoStock_Complete_Download_Plan.md) | BaoStock数据下载详细方案 | ✅ 完成 |
-| [BaoStock API参考](docs/reference/baostock_api/) | BaoStock完整API文档 | ✅ 完成 |
-
-## ⚠️ 注意事项
-
-### 推荐配置：SimTradeLab
-- **强烈推荐**: 配合 [SimTradeLab](https://github.com/kay-ou/SimTradeLab) 使用
-- **性能优势**: 相比PTrade平台回测速度提升 **10倍以上**
-- **完全免费**: 数据下载和策略回测均零成本
-- **无缝兼容**: PTrade策略代码无需修改直接运行
-- **本地运行**: 数据和策略完全本地化，保护隐私
-
-### BaoStock限制
-- **不支持并发**: BaoStock不支持多线程/多进程，所有下载均为顺序执行
-- **每日限额**: 建议控制在合理范围内，避免频繁大量请求
-- **网络稳定性**: 建议在网络稳定的环境下运行
+### BaoStock 限制
+- 不支持并发下载
+- 建议控制请求频率
 
 ### 数据质量
-- **数据来源**: 所有数据来自BaoStock免费数据源
-- **免责声明**: 数据仅供学习研究使用，请勿用于实盘交易
-- **质量检查**: 建议下载完成后使用验证工具检查数据完整性
+- 数据来自 BaoStock 免费数据源
+- 仅供学习研究使用
 
-### 增量更新建议
-- **首次下载**: 完整下载2017年至今的所有数据
-- **日常更新**: 使用 `--incremental 7` 更新最近一周
-- **月度更新**: 使用 `--incremental 30` 更新最近一月
-- **数据合并**: 程序会自动合并新旧数据，去除重复
+## 版本历史
 
-## 🔄 版本历史
+### v0.4.0 (2026-01-30) - DuckDB + Parquet 架构
+- 存储格式从 HDF5 迁移到 DuckDB + Parquet
+- 添加涨跌停价计算（导出时基于 preclose）
+- 添加 TTM 指标计算（导出时用 SQL window function）
+- 添加除权除息数据下载
+- 添加股本数据（total_shares/a_floats）
+- 优化增量更新逻辑
+- 清理废弃代码和文档
 
-### v0.3.0 (2025-11-24) - 质量与架构优化版 ⭐
-**数据质量提升**:
-- ✅ 实现市值字段计算（总市值/流通市值/总股本/流通股本）
-- ✅ 修复TTM指标计算（ROE_TTM、ROA_TTM等正确保存）
-- ✅ 添加数据验证器（自动检测异常值、重复数据、缺失字段）
-- ✅ 改进类型转换（记录所有转换失败，不再静默隐藏错误）
-
-**代码质量提升**:
-- ✅ 提取BaseFetcher基类，消除94行重复代码
-- ✅ 集中字段映射配置，消除20行重复定义
-- ✅ 移除657行未使用的PTrade接口代码
-- ✅ 代码净减少**577行**（总减少771行，新增194行）
-- ✅ 提升可维护性和可扩展性
-
-**文档完善**:
-- ✅ 添加架构审查报告（ARCHITECTURE_REVIEW.md）
-- ✅ 添加修复总结文档（FIXES_SUMMARY.md）
-- ✅ 添加冗余代码报告（REDUNDANCY_REPORT.md）
+### v0.3.0 (2025-11-24) - 质量与架构优化版
+- 实现市值字段计算
+- 修复 TTM 指标计算
+- 添加数据验证器
+- 提取 BaseFetcher 基类
 
 ### v0.2.0 (2025-11-22) - 性能优化版
-- ✅ 实现统一数据获取，API调用减少33%
-- ✅ 优化HDF5写入逻辑，移除不必要的线程锁
-- ✅ 增强增量更新机制，支持数据合并去重
-- ✅ 代码精简54%（7054行 → 3250行）
-- ✅ 删除未使用的方法和模块
+- 实现统一数据获取，API 调用减少 33%
+- 优化 HDF5 写入逻辑
 
 ### v0.1.0 (2024-11-14) - 初始版本
-- ✅ 基础数据下载功能
-- ✅ BaoStock数据源集成
-- ✅ PTrade格式兼容
+- 基础数据下载功能
+- BaoStock 数据源集成
 
-## 🤝 贡献
+## 相关链接
 
-欢迎贡献代码、报告问题或提出建议！
-
-## 📄 许可证
-
-本项目采用 MIT 许可证。详见 [LICENSE](LICENSE) 文件。
-
-## 🔗 相关链接
-
-### 推荐使用
-- **SimTradeLab** ⭐: https://github.com/kay-ou/SimTradeLab
-  - 开源Python量化回测框架
-  - 完全兼容PTrade数据格式
-  - **回测速度提升10倍以上**
-  - 免费开源，功能强大
-
-### 数据源
+- **SimTradeLab**: https://github.com/kay-ou/SimTradeLab
 - **BaoStock**: http://baostock.com/
-  - 免费A股数据平台
-  - 本项目主要数据来源
+
+## 许可证
+
+本项目采用 AGPL-3.0 许可证。详见 [LICENSE](LICENSE) 文件。
 
 ---
 
-💡 **最佳实践**: SimTradeData (数据下载) + SimTradeLab (策略回测) = 高效免费的量化研究完整解决方案
-
-## 📮 联系方式
-
-- **Issues**: https://github.com/kay-ou/SimTradeData/issues
-- **合作QQ**: 3185289532
-
----
-
-**项目状态**: ✅ 生产就绪 | **当前版本**: v0.3.0 | **最后更新**: 2025-11-24
+**项目状态**: 生产就绪 | **当前版本**: v0.4.0 | **最后更新**: 2026-01-30

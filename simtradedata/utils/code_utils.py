@@ -105,9 +105,6 @@ def retry_on_failure(max_retries: int = 1, delay: float = 0.0):
     Returns:
         A decorator.
     """
-    import time
-    from functools import wraps
-
     def decorator(func):
         @wraps(func)
         def wrapper(*args, **kwargs):
@@ -117,7 +114,6 @@ def retry_on_failure(max_retries: int = 1, delay: float = 0.0):
                     return func(*args, **kwargs)
                 except Exception as e:
                     last_exception = e
-                    # logger.warning(f"Attempt {attempt + 1}/{max_retries} failed: {e}")
                     if attempt < max_retries - 1:
                         time.sleep(delay)
             raise last_exception

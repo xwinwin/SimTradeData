@@ -1,18 +1,18 @@
 """
-SimTradeData - Generate PTrade-compatible HDF5 data from open-source providers
+SimTradeData - Download market data and store in DuckDB with Parquet export
 
-This package fetches data from BaoStock, QStock, and Yahoo Finance,
-then converts it to SimTradeLab-compatible HDF5 format.
+This package fetches data from BaoStock, converts it to PTrade-compatible
+format, stores in DuckDB for incremental updates, and exports to Parquet.
 """
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 
 from simtradedata.converters.data_converter import DataConverter
 from simtradedata.fetchers.baostock_fetcher import BaoStockFetcher
-from simtradedata.writers.h5_writer import HDF5Writer
+from simtradedata.writers.duckdb_writer import DuckDBWriter
 
 __all__ = [
     "BaoStockFetcher",
     "DataConverter",
-    "HDF5Writer",
+    "DuckDBWriter",
 ]

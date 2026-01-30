@@ -1,9 +1,7 @@
 """
 Centralized field mapping configurations
 
-This module contains all field mapping definitions from various data sources
-(BaoStock, QStock, etc.) to PTrade format. Centralizing mappings here ensures
-consistency and makes maintenance easier.
+This module contains all field mapping definitions from BaoStock to PTrade format.
 """
 
 # BaoStock -> PTrade field mappings
@@ -14,6 +12,7 @@ MARKET_FIELD_MAP = {
     "high": "high",
     "low": "low",
     "close": "close",
+    "preclose": "preclose",
     "volume": "volume",
     "amount": "money",  # BaoStock 'amount' -> PTrade 'money'
 }
@@ -54,26 +53,29 @@ FUNDAMENTAL_FIELD_MAP = {
 # Data routing configuration for DataSplitter
 DATA_ROUTING = {
     'market': {
-        'target_file': 'ptrade_data.h5',
-        'target_path': 'stock_data/{symbol}',
-        'fields': ['date', 'open', 'high', 'low', 'close', 'volume', 'amount'],
-        'rename': {'amount': 'money'}  # Use MARKET_FIELD_MAP
+        'target_table': 'stocks',
+        'fields': [
+            'date', 'open', 'high', 'low', 'close', 'preclose', 'volume', 'amount',
+        ],
+        'rename': {
+            'amount': 'money',
+        },
     },
     'valuation': {
-        'target_file': 'ptrade_fundamentals.h5',
-        'target_path': 'valuation/{symbol}',
-        'fields': ['date', 'close', 'peTTM', 'pbMRQ', 'psTTM', 'pcfNcfTTM', 'turn'],
-        'rename': {  # Use VALUATION_FIELD_MAP
+        'target_table': 'valuation',
+        'fields': [
+            'date', 'peTTM', 'pbMRQ', 'psTTM', 'pcfNcfTTM', 'turn',
+        ],
+        'rename': {
             'peTTM': 'pe_ttm',
             'pbMRQ': 'pb',
             'psTTM': 'ps_ttm',
             'pcfNcfTTM': 'pcf',
-            'turn': 'turnover_rate'
-        }
+            'turn': 'turnover_rate',
+        },
     },
     'status': {
-        'target_file': 'memory',  # Stored in memory for building stock_status_history
-        'target_path': None,
+        'target_table': None,  # Stored in memory
         'fields': ['date', 'isST', 'tradestatus'],
         'rename': {}
     }

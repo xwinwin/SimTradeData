@@ -1,8 +1,8 @@
 """
-Data splitter for routing unified data to different HDF5 structures
+Data splitter for routing unified data to different storage targets
 
 This module splits unified data fetched from BaoStock into separate
-DataFrames for different target files and paths.
+DataFrames for different target tables.
 """
 
 import logging
@@ -18,10 +18,10 @@ logger = logging.getLogger(__name__)
 class DataSplitter:
     """
     Split unified data into separate DataFrames for different targets
-    
+
     This class takes a unified DataFrame containing market data, valuation data,
     and status data, and splits it into separate DataFrames that can be written
-    to different HDF5 files.
+    to different DuckDB tables.
     """
     
     def __init__(self, routing_config: Dict = None):
