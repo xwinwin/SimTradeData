@@ -1,8 +1,8 @@
 # SimTradeData - 高效量化交易数据下载工具
 
-> **优化的BaoStock数据下载** | **PTrade格式兼容** | **DuckDB + Parquet存储**
+> **BaoStock + Mootdx 双数据源** | **PTrade格式兼容** | **DuckDB + Parquet存储**
 
-**SimTradeData** 是为 [SimTradeLab](https://github.com/kay-ou/SimTradeLab) 设计的高效数据下载工具。采用 DuckDB 作为中间存储，导出为 Parquet 格式，支持高效的增量更新和数据查询。
+**SimTradeData** 是为 [SimTradeLab](https://github.com/kay-ou/SimTradeLab) 设计的高效数据下载工具。支持 BaoStock 和 Mootdx（通达信）双数据源，采用 DuckDB 作为中间存储，导出为 Parquet 格式，支持高效的增量更新和数据查询。
 
 ---
 
@@ -97,6 +97,10 @@ poetry shell
 
 #### 2. 下载数据
 
+支持两种数据源，任选其一：
+
+**数据源 A：BaoStock（免费，无需安装客户端）**
+
 ```bash
 # 首次下载：下载全部数据（2017至今）
 poetry run python scripts/download_efficient.py
@@ -106,6 +110,43 @@ poetry run python scripts/download_efficient.py --skip-fundamentals
 
 # 指定起始日期
 poetry run python scripts/download_efficient.py --start-date 2020-01-01
+```
+
+**数据源 B：Mootdx（通达信API，速度更快）**
+
+```bash
+# 首次下载：下载全部数据（2015至今）
+poetry run python scripts/download_mootdx.py
+
+# 跳过财务数据（更快）
+poetry run python scripts/download_mootdx.py --skip-fundamentals
+
+# 指定起始日期
+poetry run python scripts/download_mootdx.py --start-date 2020-01-01
+
+# 指定财务数据ZIP下载目录
+poetry run python scripts/download_mootdx.py --download-dir /tmp/tdx_data
+```
+
+**数据源 C：TDX官方数据包（推荐，最快）**
+
+自动下载通达信官方沪深京日线完整包（~500MB），包含完整历史数据：
+
+```bash
+# 自动下载并导入（增量更新）
+poetry run python scripts/download_tdx_day.py
+
+# 强制重新下载
+poetry run python scripts/download_tdx_day.py --force-download
+
+# 完全重新导入
+poetry run python scripts/download_tdx_day.py --full
+
+# 仅下载不导入
+poetry run python scripts/download_tdx_day.py --download-only
+
+# 使用已下载的文件
+poetry run python scripts/download_tdx_day.py --file hsjday.zip
 ```
 
 #### 3. 导出为 Parquet
@@ -130,13 +171,19 @@ cp -r data/parquet/* /path/to/SimTradeLab/data/
 ```
 SimTradeData/
 ├── scripts/
-│   ├── download_efficient.py    # 主下载脚本
+│   ├── download_efficient.py    # BaoStock 下载脚本
+│   ├── download_mootdx.py       # Mootdx（通达信API）下载脚本
+│   ├── download_tdx_day.py      # TDX 官方日线数据包下载导入脚本
+│   ├── import_tdx_day.py        # TDX .day 文件导入脚本
 │   └── export_parquet.py        # Parquet 导出脚本
 ├── simtradedata/
 │   ├── fetchers/
 │   │   ├── base_fetcher.py      # 基础 Fetcher 类
 │   │   ├── baostock_fetcher.py  # BaoStock 数据获取
-│   │   └── unified_fetcher.py   # 统一数据获取（优化版）
+│   │   ├── unified_fetcher.py   # BaoStock 统一数据获取（优化版）
+│   │   ├── mootdx_fetcher.py    # Mootdx 基础数据获取
+│   │   ├── mootdx_unified_fetcher.py  # Mootdx 统一数据获取
+│   │   └── mootdx_affair_fetcher.py   # Mootdx 财务数据获取
 │   ├── processors/
 │   │   └── data_splitter.py     # 数据分流处理
 │   ├── writers/
@@ -144,7 +191,8 @@ SimTradeData/
 │   ├── validators/
 │   │   └── data_validator.py    # 数据质量验证
 │   ├── config/
-│   │   └── field_mappings.py    # 字段映射配置
+│   │   ├── field_mappings.py    # 字段映射配置
+│   │   └── mootdx_finvalue_map.py  # Mootdx 财务字段映射
 │   └── utils/
 │       ├── code_utils.py        # 股票代码转换
 │       └── ttm_calculator.py    # 季度范围计算
@@ -217,9 +265,29 @@ BATCH_SIZE = 20
 
 ## 注意事项
 
+### 数据源对比
+
+| 特性 | BaoStock | Mootdx API | TDX 官方数据包 |
+|------|----------|------------|---------------|
+| 速度 | 较慢 | 快 | 最快（一次性下载） |
+| 估值数据 | 有 (PE/PB/PS等) | 无 | 无 |
+| 财务数据 | 有 | 有（批量ZIP） | 无 |
+| 历史起始 | 2017年 | 2015年 | 完整历史 |
+| 并发支持 | 不支持 | 支持 | N/A |
+| 数据包大小 | - | - | ~500MB |
+
 ### BaoStock 限制
 - 不支持并发下载
 - 建议控制请求频率
+
+### Mootdx 限制
+- 不包含估值指标数据
+- 财务数据通过下载ZIP文件获取
+
+### TDX 官方数据包
+- 仅包含日线行情数据（OHLCV）
+- 不包含估值、财务数据
+- 适合快速获取完整历史行情
 
 ### 数据质量
 - 数据来自 BaoStock 免费数据源
@@ -254,6 +322,7 @@ BATCH_SIZE = 20
 
 - **SimTradeLab**: https://github.com/kay-ou/SimTradeLab
 - **BaoStock**: http://baostock.com/
+- **Mootdx**: https://github.com/mootdx/mootdx
 
 ## 许可证
 
