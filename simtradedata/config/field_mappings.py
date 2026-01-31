@@ -1,7 +1,8 @@
 """
 Centralized field mapping configurations
 
-This module contains all field mapping definitions from BaoStock to PTrade format.
+This module contains all field mapping definitions from data sources to PTrade format.
+Supports: BaoStock, mootdx
 """
 
 # BaoStock -> PTrade field mappings
@@ -15,6 +16,17 @@ MARKET_FIELD_MAP = {
     "preclose": "preclose",
     "volume": "volume",
     "amount": "money",  # BaoStock 'amount' -> PTrade 'money'
+}
+
+# Mootdx market data field mapping (mootdx -> PTrade)
+MOOTDX_MARKET_FIELD_MAP = {
+    "datetime": "date",
+    "open": "open",
+    "high": "high",
+    "low": "low",
+    "close": "close",
+    "vol": "volume",
+    "amount": "money",
 }
 
 VALUATION_FIELD_MAP = {
@@ -48,6 +60,15 @@ FUNDAMENTAL_FIELD_MAP = {
     "YOYPNI": "np_parent_company_yoy",
     # From cash flow data
     "ebitToInterest": "interest_cover",
+}
+
+# Mootdx XDXR field mapping (for ex-rights/ex-dividend data)
+MOOTDX_XDXR_FIELD_MAP = {
+    "datetime": "date",
+    "songzhuangu": "bonus_ps",      # Song zhuan gu (bonus shares)
+    "peigu": "rationed_ps",          # Pei gu (rationed shares)
+    "peigujia": "rationed_px",       # Pei gu price
+    "fenhong": "dividend",           # Cash dividend
 }
 
 # Data routing configuration for DataSplitter

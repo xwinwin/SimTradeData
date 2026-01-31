@@ -94,6 +94,27 @@ def convert_from_ptrade_code(code: str, target_source: str) -> str:
     return code
 
 
+def get_mootdx_market(symbol: str) -> int:
+    """
+    Convert PTrade code to mootdx market code.
+
+    Args:
+        symbol: Stock code in PTrade format (e.g., '000001.SZ', '600000.SS')
+
+    Returns:
+        0 for Shenzhen (codes starting with 0/1/2/3)
+        1 for Shanghai (codes starting with 5/6/7/8/9)
+
+    Examples:
+        >>> get_mootdx_market('000001.SZ')
+        0
+        >>> get_mootdx_market('600000.SS')
+        1
+    """
+    code = symbol.split(".")[0] if "." in symbol else symbol
+    return 0 if code[0] in "0123" else 1
+
+
 def retry_on_failure(max_retries: int = 1, delay: float = 0.0):
     """
     Decorator factory for retrying a function on failure.

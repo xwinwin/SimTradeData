@@ -68,11 +68,11 @@ data/
 
 ### 方式一：直接下载现成数据（推荐）
 
-已导出的 Parquet 数据包（2015年至今），可直接用于 SimTradeLab 回测：
+已导出的 Parquet 数据包（2025年数据），可直接用于 SimTradeLab 回测：
 
-> 夸克网盘分享：[simtradelab_data_2025_parquet.tar.gz](https://pan.quark.cn/s/9934dd589d22)
+> 夸克网盘分享：[simtradelab_data_2025_parquet.tar.gz](https://pan.quark.cn/s/35112d8ccbf6)
 >
-> 提取码：WNr9
+> 提取码：FM2s
 
 ```bash
 # 解压到 SimTradeLab 数据目录

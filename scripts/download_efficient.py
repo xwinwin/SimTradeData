@@ -136,7 +136,7 @@ class EfficientBaoStockDownloader:
                 start_date = actual_start
 
             # Skip if already up to date
-            if start_date > end_date:
+            if start_date >= end_date:
                 return None
 
             unified_df = self.unified_fetcher.fetch_unified_daily_data(
@@ -466,12 +466,26 @@ def download_all_data(
         downloader.standard_fetcher.login()
 
         try:
-            # Get stock pool - use cached if available, only sample new dates
+            # Get stock pool - merge from multiple sources
             from simtradedata.utils.sampling import (
                 generate_monthly_end_dates,
                 generate_monthly_start_dates,
             )
             from simtradedata.utils.code_utils import convert_to_ptrade_code
+
+            def is_a_share_stock(code: str) -> bool:
+                """Filter to only A-share stocks (exclude ETF, index, bonds)"""
+                symbol = code.split('.')[0] if '.' in code else code
+                if len(symbol) != 6:
+                    return False
+                prefix = symbol[:3]
+                # Shanghai: 600/601/603/605 (main), 688/689 (STAR)
+                # Shenzhen: 000/001/002/003 (main), 300/301 (ChiNext)
+                valid_prefixes = {
+                    '600', '601', '603', '605', '688', '689',  # SH
+                    '000', '001', '002', '003', '300', '301',  # SZ
+                }
+                return prefix in valid_prefixes
 
             sample_dates = generate_monthly_start_dates(
                 START_DATE, end_date.strftime("%Y-%m-%d")
@@ -481,12 +495,19 @@ def download_all_data(
             sampled_dates = set(downloader.writer.get_sampled_dates())
             cached_pool = downloader.writer.get_stock_pool()
 
+            # Also get stocks already in database (from TDX import)
+            existing_stocks = set(downloader.writer.get_existing_stocks("stocks"))
+
             # Filter to only unsampled dates
             new_dates = [d for d in sample_dates if d.date() not in sampled_dates]
 
             if cached_pool and not new_dates:
-                print(f"\nUsing cached stock pool: {len(cached_pool)} stocks")
-                stock_pool = cached_pool
+                # Merge cached pool with existing stocks
+                all_stocks = set(cached_pool) | existing_stocks
+                # Filter to A-share stocks only
+                stock_pool = sorted([s for s in all_stocks if is_a_share_stock(s)])
+                print(f"\nStock pool: {len(stock_pool)} A-shares")
+                print(f"  (from stock_pool: {len(cached_pool)}, from TDX import: {len(existing_stocks)})")
             else:
                 # Sample new dates (or all if first run)
                 dates_to_sample = new_dates if cached_pool else sample_dates
@@ -509,8 +530,11 @@ def download_all_data(
                     except Exception as e:
                         logger.error(f"Failed to sample {date_str}: {e}")
 
-                stock_pool = sorted(list(all_stocks))
-                print(f"Total stocks: {len(stock_pool)}")
+                # Merge with existing stocks from TDX import
+                all_stocks |= existing_stocks
+                # Filter to A-share stocks only
+                stock_pool = sorted([s for s in all_stocks if is_a_share_stock(s)])
+                print(f"Total A-share stocks: {len(stock_pool)}")
 
             # Download in batches
             batches = [

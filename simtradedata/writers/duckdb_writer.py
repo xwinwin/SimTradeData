@@ -642,6 +642,21 @@ class DuckDBWriter:
             return str(result[0])
         return None
 
+    def get_min_date(self, table: str, symbol: str = None) -> Optional[str]:
+        """Get minimum date for backfill detection"""
+        if symbol:
+            result = self.conn.execute(f"""
+                SELECT MIN(date) FROM {table} WHERE symbol = ?
+            """, [symbol]).fetchone()
+        else:
+            result = self.conn.execute(f"""
+                SELECT MIN(date) FROM {table}
+            """).fetchone()
+
+        if result and result[0]:
+            return str(result[0])
+        return None
+
     def get_existing_stocks(self, table: str = "stocks") -> List[str]:
         """Get list of symbols in database"""
         result = self.conn.execute(f"""
